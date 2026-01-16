@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: multiwriter-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: multiwriter-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_storage:/root/.ollama
+    restart: unless-stopped
+    # Note: You'll need to pull the model manually after starting:
+    # docker exec -it multiwriter-ollama ollama pull llama3.1:70b
+
+volumes:
+  qdrant_storage:
+  ollama_storage:
