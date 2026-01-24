@@ -31,10 +31,10 @@ After installation, Ollama runs automatically as a background service.
 
 Open a terminal and run:
 ```bash
-ollama pull llama3.1:8b
+ollama pull qwen2.5:14b
 ```
 
-This downloads the Llama 3.1 8B model (~4.7GB). Wait for the download to complete.
+This downloads the Qwen 2.5 14B model (~9GB). Wait for the download to complete.
 
 ### 3. Run the CLI
 
@@ -58,10 +58,10 @@ You can use different Ollama models by editing `config/config.yaml`:
 
 | Model | Size | VRAM Required |
 |-------|------|---------------|
-| `llama3.1:8b` (default) | ~4.7GB | ~6GB |
+| `qwen2.5:14b` (default) | ~9GB | ~10GB |
+| `llama3.1:8b` | ~4.7GB | ~6GB |
+| `mistral-nemo:12b` | ~7GB | ~8GB |
 | `llama3.1:70b` | ~40GB | ~48GB |
-| `mistral:7b` | ~4GB | ~6GB |
-| `mixtral:8x7b` | ~26GB | ~32GB |
 
 ## Optional: Vector Store (Qdrant)
 
