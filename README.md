@@ -11,49 +11,36 @@ This system uses specialized AI agents that collaborate like a writers' room:
 - **Worldbuilding**: World rules and consistency
 - **Scene Dynamics**: Scene breakdowns
 
-## Setup
+## Setup Status
 
-### Prerequisites
+- [x] Python virtual environment created (`venv/`)
+- [x] Python dependencies installed
+- [x] Configuration file ready (`config/config.yaml`)
+- [ ] Ollama installed and running (see below)
+- [ ] LLM model pulled
 
-- Python 3.11+
-- Docker and Docker Compose
-- AWS account (for DynamoDB and S3) - optional for local development
+## Quick Start
 
-### Installation
+### 1. Install Ollama (One-time setup)
 
-1. Create a virtual environment:
+Download and install Ollama for Windows from: https://ollama.com/download
+
+After installation, Ollama runs automatically as a background service.
+
+### 2. Pull the LLM Model (One-time setup)
+
+Open a terminal and run:
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+ollama pull llama3.1:8b
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+This downloads the Llama 3.1 8B model (~4.7GB). Wait for the download to complete.
 
-3. Start services (Qdrant and Ollama):
-```bash
-docker-compose up -d
-```
+### 3. Run the CLI
 
-4. Pull the Llama 3.1 70B model:
-```bash
-docker exec -it multiwriter-ollama ollama pull llama3.1:70b
-```
-
-### Configuration
-
-Copy `config/config.yaml.example` to `config/config.yaml` and configure:
-- LLM settings
-- AWS credentials (if using DynamoDB/S3)
-- Qdrant connection settings
-
-## Usage
-
-Run the CLI to generate a novel outline:
-
-```bash
+Activate the virtual environment and run:
+```powershell
+.\venv\Scripts\Activate.ps1
 python -m src.cli.main
 ```
 
@@ -63,13 +50,44 @@ Follow the interactive prompts to provide:
 - Key elements
 - Character concepts
 
-The system will generate a complete outline saved as Markdown.
+The system will generate a complete outline saved as Markdown in the `output/` directory.
+
+## Alternative Models
+
+You can use different Ollama models by editing `config/config.yaml`:
+
+| Model | Size | VRAM Required |
+|-------|------|---------------|
+| `llama3.1:8b` (default) | ~4.7GB | ~6GB |
+| `llama3.1:70b` | ~40GB | ~48GB |
+| `mistral:7b` | ~4GB | ~6GB |
+| `mixtral:8x7b` | ~26GB | ~32GB |
+
+## Optional: Vector Store (Qdrant)
+
+For enhanced semantic search capabilities, you can run Qdrant via Docker:
+
+```bash
+docker-compose up -d qdrant
+```
+
+This is optional for basic usage.
 
 ## Development
 
 Run tests:
 ```bash
 pytest tests/
+```
+
+Format code:
+```bash
+black src/ tests/
+```
+
+Type checking:
+```bash
+mypy src/
 ```
 
 ## License
