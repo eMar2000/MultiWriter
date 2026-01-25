@@ -64,13 +64,26 @@ Your role is to break down plot beats into actionable scenes with clear goals, c
             if "scene_id" not in scene_data_item:
                 scene_data_item["scene_id"] = str(uuid.uuid4())
 
-            # Ensure scene_type is valid
+            # Normalize scene_type (LLM may return compound types like "action/reaction")
             scene_type_str = scene_data_item.get("scene_type", "action")
-            try:
-                scene_type = SceneType(scene_type_str)
-                scene_data_item["scene_type"] = scene_type.value
-            except ValueError:
-                scene_data_item["scene_type"] = SceneType.ACTION.value
+            if scene_type_str:
+                # Take the first part if compound (e.g., "action/reaction" -> "action")
+                scene_type_str = scene_type_str.split("/")[0].strip().lower()
+                try:
+                    scene_type = SceneType(scene_type_str)
+                    scene_data_item["scene_type"] = scene_type.value
+                except ValueError:
+                    scene_data_item["scene_type"] = SceneType.ACTION.value
+
+            # Normalize sequel_type if present
+            sequel_type_str = scene_data_item.get("sequel_type")
+            if sequel_type_str:
+                sequel_type_str = sequel_type_str.split("/")[0].strip().lower()
+                from src.models import SequelType
+                try:
+                    scene_data_item["sequel_type"] = SequelType(sequel_type_str).value
+                except ValueError:
+                    scene_data_item["sequel_type"] = None
 
             try:
                 scene = SceneOutline(**scene_data_item)

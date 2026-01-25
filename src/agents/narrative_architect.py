@@ -47,10 +47,14 @@ Your role is to design the overall narrative structure, create plot beats, and d
             max_tokens=4000
         )
 
-        # Validate structure type
+        # Validate structure type (normalize to lowercase and handle variations)
         structure_type_str = plot_data.get("structure_type", "three_act")
+        if structure_type_str:
+            # Normalize: lowercase, replace spaces with underscores
+            structure_type_str = structure_type_str.lower().replace(" ", "_").replace("-", "_")
         try:
             structure_type = StoryStructure(structure_type_str)
+            plot_data["structure_type"] = structure_type.value
         except ValueError:
             # Default to three_act if invalid
             structure_type = StoryStructure.THREE_ACT

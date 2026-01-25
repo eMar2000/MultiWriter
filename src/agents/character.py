@@ -60,6 +60,12 @@ Your role is to develop character profiles that reflect real human psychology, w
             if "id" not in char_data:
                 char_data["id"] = str(uuid.uuid4())
 
+            # Normalize enum values to lowercase (LLM may return capitalized)
+            if "archetype" in char_data and char_data["archetype"]:
+                char_data["archetype"] = char_data["archetype"].lower()
+            if "arc_type" in char_data and char_data["arc_type"]:
+                char_data["arc_type"] = char_data["arc_type"].lower()
+
             try:
                 character = CharacterProfile(**char_data)
                 validated_characters.append(character)

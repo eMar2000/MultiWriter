@@ -135,6 +135,121 @@ class BaseAgent(ABC):
 
         return response.content
 
+    def _fix_json(self, text: str) -> str:
+        """
+        Attempt to fix common JSON issues from LLM output.
+        
+        Args:
+            text: JSON string that may have issues
+            
+        Returns:
+            Fixed JSON string
+        """
+        import re
+        
+        # Remove trailing commas before } or ]
+        text = re.sub(r',(\s*[}\]])', r'\1', text)
+        
+        # Try to close unclosed brackets if JSON is truncated
+        # Count open brackets
+        open_braces = text.count('{') - text.count('}')
+        open_brackets = text.count('[') - text.count(']')
+        
+        # If we have unclosed brackets, try to close them
+        if open_braces > 0 or open_brackets > 0:
+            # Find the last complete value and truncate there
+            # Then add closing brackets
+            
+            # Remove any trailing incomplete content after last complete value
+            # Look for patterns like: "key": ... or "key": "incomplete
+            text = re.sub(r',\s*"[^"]*":\s*[^,}\]]*$', '', text)
+            text = re.sub(r',\s*$', '', text)
+            
+            # Add missing closing brackets
+            text = text.rstrip()
+            for _ in range(open_brackets):
+                text += ']'
+            for _ in range(open_braces):
+                text += '}'
+        
+        return text
+
+    def _extract_json(self, text: str) -> str:
+        """
+        Extract JSON from text that may contain extra content before/after.
+        
+        Args:
+            text: Raw text that may contain JSON
+            
+        Returns:
+            Extracted JSON string
+        """
+        text = text.strip()
+        
+        # Remove markdown code blocks if present
+        if text.startswith("```json"):
+            text = text[7:]  # Remove ```json
+        elif text.startswith("```"):
+            text = text[3:]  # Remove ```
+        
+        if text.endswith("```"):
+            text = text[:-3]
+        
+        text = text.strip()
+        
+        # Find the start of JSON (first { or [)
+        json_start = -1
+        for i, char in enumerate(text):
+            if char in '{[':
+                json_start = i
+                break
+        
+        if json_start == -1:
+            return text  # No JSON found, return as-is
+        
+        # Find the matching closing bracket
+        start_char = text[json_start]
+        end_char = '}' if start_char == '{' else ']'
+        
+        depth = 0
+        in_string = False
+        escape_next = False
+        json_end = -1
+        
+        for i in range(json_start, len(text)):
+            char = text[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\' and in_string:
+                escape_next = True
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if in_string:
+                continue
+            
+            if char == start_char:
+                depth += 1
+            elif char == end_char:
+                depth -= 1
+                if depth == 0:
+                    json_end = i + 1
+                    break
+        
+        if json_end > json_start:
+            return text[json_start:json_end]
+        
+        # If we couldn't find a matching bracket, the JSON might be truncated
+        # Extract what we have and try to fix it
+        extracted = text[json_start:] if json_start >= 0 else text
+        return self._fix_json(extracted)
+
     async def generate_structured_output(
         self,
         system_prompt: str,
@@ -159,32 +274,33 @@ class BaseAgent(ABC):
         # Add instruction to output JSON
         format_prompt = ""
         if output_format == "json":
-            format_prompt = "\n\nIMPORTANT: Respond with valid JSON only. Do not include any markdown formatting or code blocks. Return pure JSON."
+            format_prompt = "\n\nIMPORTANT: Respond with valid JSON only. Do not include any text before or after the JSON. Do not include any markdown formatting or code blocks. Return pure JSON."
 
         full_prompt = user_prompt + format_prompt
 
-        response = await self.generate_with_llm(
-            system_prompt=system_prompt,
-            user_prompt=full_prompt,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
+        # Try up to 2 times in case of JSON parsing errors
+        last_error = None
+        for attempt in range(2):
+            response = await self.generate_with_llm(
+                system_prompt=system_prompt,
+                user_prompt=full_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
 
-        # Parse JSON response
-        # Remove markdown code blocks if present
-        cleaned_response = response.strip()
-        if cleaned_response.startswith("```"):
-            # Extract JSON from code block
-            lines = cleaned_response.split("\n")
-            cleaned_response = "\n".join(lines[1:-1])
-        if cleaned_response.startswith("```json"):
-            lines = cleaned_response.split("\n")
-            cleaned_response = "\n".join(lines[1:-1])
+            # Extract and parse JSON response
+            cleaned_response = self._extract_json(response)
 
-        try:
-            return json.loads(cleaned_response)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse JSON response: {str(e)}\nResponse: {cleaned_response}")
+            try:
+                return json.loads(cleaned_response)
+            except json.JSONDecodeError as e:
+                last_error = e
+                if attempt == 0:
+                    # First attempt failed, try again with a more explicit prompt
+                    full_prompt = user_prompt + "\n\nCRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, no truncation. Complete the entire JSON structure."
+                    continue
+                else:
+                    raise ValueError(f"Failed to parse JSON response: {str(last_error)}\nResponse: {cleaned_response[:500]}...")
 
     @abstractmethod
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:

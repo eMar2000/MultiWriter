@@ -13,7 +13,7 @@ from rich.table import Table
 
 from src.models import NovelInput, Genre
 from src.llm import OllamaClient
-from src.memory import DynamoDBState, S3ObjectStore, QdrantVectorStore
+from src.memory import LocalFileState, LocalObjectStore, QdrantVectorStore
 from src.orchestrator import Orchestrator
 from src.export import MarkdownExporter
 
@@ -46,30 +46,50 @@ def create_storage(config: dict):
     """Create storage instances from config"""
     storage_config = config.get("storage", {})
 
-    # DynamoDB
-    dynamodb_config = storage_config.get("dynamodb", {})
-    structured_state = DynamoDBState(
-        region=dynamodb_config.get("region", "us-east-1"),
-        endpoint_url=dynamodb_config.get("endpoint_url"),
-        table_prefix=""
-    )
+    # Check storage provider (default to local)
+    provider = storage_config.get("provider", "local")
 
-    # S3
-    s3_config = storage_config.get("s3", {})
-    object_store = S3ObjectStore(
-        bucket=s3_config.get("bucket", "multiwriter-outlines"),
-        region=s3_config.get("region", "us-east-1"),
-        endpoint_url=s3_config.get("endpoint_url")
-    )
+    if provider == "local":
+        # Local file-based storage
+        local_config = storage_config.get("local", {})
+        structured_state = LocalFileState(
+            storage_dir=local_config.get("data_dir", "./data")
+        )
+        object_store = LocalObjectStore(
+            storage_dir=local_config.get("objects_dir", "./data/objects")
+        )
+    else:
+        # AWS storage (DynamoDB + S3) - requires credentials
+        from src.memory import DynamoDBState, S3ObjectStore
 
-    # Qdrant
+        dynamodb_config = storage_config.get("dynamodb", {})
+        structured_state = DynamoDBState(
+            region=dynamodb_config.get("region", "us-east-1"),
+            endpoint_url=dynamodb_config.get("endpoint_url"),
+            table_prefix=""
+        )
+
+        s3_config = storage_config.get("s3", {})
+        object_store = S3ObjectStore(
+            bucket=s3_config.get("bucket", "multiwriter-outlines"),
+            region=s3_config.get("region", "us-east-1"),
+            endpoint_url=s3_config.get("endpoint_url")
+        )
+
+    # Qdrant (optional - gracefully handle if not available)
+    vector_store = None
     qdrant_config = storage_config.get("qdrant", {})
-    vector_store = QdrantVectorStore(
-        host=qdrant_config.get("host", "localhost"),
-        port=qdrant_config.get("port", 6333),
-        collection_name=qdrant_config.get("collection_name", "multiwriter-embeddings"),
-        vector_size=qdrant_config.get("vector_size", 768)
-    )
+    if qdrant_config.get("enabled", False):
+        try:
+            vector_store = QdrantVectorStore(
+                host=qdrant_config.get("host", "localhost"),
+                port=qdrant_config.get("port", 6333),
+                collection_name=qdrant_config.get("collection_name", "multiwriter-embeddings"),
+                vector_size=qdrant_config.get("vector_size", 768)
+            )
+        except Exception:
+            # Qdrant not available, continue without vector store
+            pass
 
     return structured_state, object_store, vector_store
 

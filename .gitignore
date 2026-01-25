@@ -14,6 +14,7 @@ pip-delete-this-directory.txt
 # IDEs
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
@@ -24,10 +25,11 @@ pip-delete-this-directory.txt
 htmlcov/
 .tox/
 
-# Output
+# Output (generated outlines)
 output/
-*.md
-!README.md
+
+# Local data storage
+data/
 
 # Configuration
 config/config.yaml

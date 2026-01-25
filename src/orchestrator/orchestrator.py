@@ -132,13 +132,12 @@ class Orchestrator:
             status="in_progress"
         )
 
-        # Save initial outline to memory
+        # Save initial outline to memory (use mode='json' for proper serialization)
+        outline_data = outline.model_dump(mode='json')
+        outline_data["id"] = self.novel_id  # Ensure ID is set
         await self.structured_state.write(
             "novel-outlines",
-            {
-                "id": self.novel_id,
-                **outline.model_dump()
-            }
+            outline_data
         )
 
         # Create workflow
@@ -172,15 +171,19 @@ class Orchestrator:
         if not outline_data:
             raise RuntimeError("Failed to retrieve outline from memory")
 
+        # Ensure the input field is present (it may have been lost during updates)
+        if "input" not in outline_data or outline_data["input"] is None:
+            outline_data["input"] = novel_input.model_dump(mode='json')
+
         # Update outline
         outline = NovelOutline(**outline_data)
         outline.status = "completed"
         outline.updated_at = datetime.utcnow()
 
-        # Save final outline
+        # Save final outline (use mode='json' for proper serialization)
         await self.structured_state.write(
             "novel-outlines",
-            outline.model_dump()
+            outline.model_dump(mode='json')
         )
 
         return outline
