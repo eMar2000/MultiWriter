@@ -1,4 +1,9 @@
-"""Main orchestrator for multi-agent workflows"""
+"""Main orchestrator for multi-agent workflows
+
+DEPRECATED: This orchestrator is for the old interactive workflow.
+Use DocumentOrchestrator (orchestrator_v2.py) for document-driven outline generation.
+This class is kept for backward compatibility with existing tests only.
+"""
 
 import asyncio
 from typing import Dict, Any, Optional, List

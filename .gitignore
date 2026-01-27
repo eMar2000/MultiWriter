@@ -26,10 +26,13 @@ htmlcov/
 .tox/
 
 # Output (generated outlines)
-output/
+output/*.md
 
 # Local data storage
 data/
+
+# Input documents (user content)
+input/*.md
 
 # Configuration
 config/config.yaml

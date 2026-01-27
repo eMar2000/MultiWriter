@@ -6,6 +6,9 @@ from .narrative_architect import NarrativeArchitectAgent
 from .character import CharacterAgent
 from .worldbuilding import WorldbuildingAgent
 from .scene_dynamics import SceneDynamicsAgent
+from .synthesis import SynthesisAgent
+from .outline_architect import OutlineArchitectAgent
+from .coverage_verifier import CoverageVerifierAgent
 
 __all__ = [
     "BaseAgent",
@@ -14,4 +17,7 @@ __all__ = [
     "CharacterAgent",
     "WorldbuildingAgent",
     "SceneDynamicsAgent",
+    "SynthesisAgent",
+    "OutlineArchitectAgent",
+    "CoverageVerifierAgent",
 ]

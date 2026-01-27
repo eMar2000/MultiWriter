@@ -1,7 +1,10 @@
 """Qdrant interface for vector embeddings"""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
 from abc import ABC, abstractmethod
+
+if TYPE_CHECKING:
+    from src.models import EntityRegistry
 from qdrant_client import QdrantClient, AsyncQdrantClient
 from qdrant_client.models import (
     Distance,
@@ -199,3 +202,84 @@ class QdrantVectorStore(VectorStore):
             return True
         except Exception as e:
             raise RuntimeError(f"Qdrant delete error: {str(e)}") from e
+
+    async def retrieve_by_ids(
+        self,
+        collection_name: str,
+        entity_ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Retrieve entities by their IDs (deterministic)"""
+        try:
+            results = []
+            # Qdrant retrieve method
+            retrieved = self.client.retrieve(
+                collection_name=collection_name,
+                ids=entity_ids
+            )
+
+            for point in retrieved:
+                results.append({
+                    "id": str(point.id),
+                    "payload": point.payload
+                })
+
+            return results
+        except Exception as e:
+            raise RuntimeError(f"Qdrant retrieve_by_ids error: {str(e)}") from e
+
+    async def retrieve_related(
+        self,
+        collection_name: str,
+        query: str,
+        embedding_fn: Callable[[str], Any],
+        top_k: int = 10,
+        entity_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve semantically related entities"""
+        # Generate embedding
+        query_embedding = await embedding_fn(query)
+
+        # Build filter if entity_type specified
+        filter_dict = None
+        if entity_type:
+            filter_dict = {"type": entity_type}
+
+        return await self.search(
+            collection_name=collection_name,
+            query_vector=query_embedding,
+            limit=top_k,
+            filter=filter_dict
+        )
+
+    async def index_entities(
+        self,
+        collection_name: str,
+        registry: 'EntityRegistry',
+        full_content_map: Dict[str, str],
+        embedding_fn: Callable[[str], Any]
+    ) -> bool:
+        """Index all entities with their full content for retrieval"""
+        points = []
+
+        for entity_id, entity in registry.entities.items():
+            full_content = full_content_map.get(entity_id, entity.summary)
+
+            # Generate embedding
+            embedding = await embedding_fn(full_content)
+
+            # entity_type may be an enum or string (depending on use_enum_values config)
+            entity_type_str = entity.entity_type.value if hasattr(entity.entity_type, 'value') else str(entity.entity_type)
+            points.append({
+                "id": entity_id,
+                "vector": embedding,
+                "payload": {
+                    "name": entity.name,
+                    "type": entity_type_str,
+                    "summary": entity.summary,
+                    "content": full_content,
+                    "tags": entity.tags,
+                    "source_doc": entity.source_doc
+                }
+            })
+
+        return await self.upsert(collection_name, points)

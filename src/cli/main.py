@@ -1,28 +1,41 @@
-"""CLI interface for MultiWriter"""
+"""CLI interface for MultiWriter - Document-Driven Outline Generator"""
 
 import asyncio
-import yaml
+import logging
 from pathlib import Path
 from typing import Optional
 import click
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from src.models import NovelInput, Genre
 from src.llm import OllamaClient
 from src.memory import LocalFileState, LocalObjectStore, QdrantVectorStore
-from src.orchestrator import Orchestrator
+from src.orchestrator import DocumentOrchestrator
 from src.export import MarkdownExporter
 
 
 console = Console()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
 
 def load_config() -> dict:
     """Load configuration from config.yaml"""
+    try:
+        import yaml
+    except ImportError:
+        console.print("[yellow]Warning: PyYAML not installed. Install with: pip install pyyaml[/yellow]")
+        return {}
+
     config_path = Path(__file__).parent.parent.parent / "config" / "config.yaml"
     if not config_path.exists():
         console.print(f"[yellow]Warning: Config file not found at {config_path}[/yellow]")
@@ -94,144 +107,95 @@ def create_storage(config: dict):
     return structured_state, object_store, vector_store
 
 
-def collect_novel_input() -> NovelInput:
-    """Collect novel input from user interactively"""
-    console.print(Panel("[bold blue]MultiWriter - Novel Outline Generator[/bold blue]", border_style="blue"))
-    console.print()
-
-    # Premise
-    premise = Prompt.ask("[bold]Enter the novel premise[/bold]", console=console)
-
-    # Genre
-    console.print("\n[bold]Available genres:[/bold]")
-    genres = [g.value for g in Genre]
-    for i, genre in enumerate(genres, 1):
-        console.print(f"  {i}. {genre}")
-
-    genre_choice = Prompt.ask(
-        "\n[bold]Select genre (number or name)[/bold]",
-        default="1",
-        console=console
+async def generate_from_documents(
+    worldbuilding: Path,
+    characters: Path,
+    scenes: Path,
+    output: Path,
+    config: dict
+) -> Optional[dict]:
+    """Generate outline from document inputs"""
+    # Build novel input (minimal - documents contain the info)
+    novel_input = NovelInput(
+        premise="Generated from documents",
+        genre=Genre.OTHER
     )
 
-    # Parse genre choice
-    try:
-        genre_idx = int(genre_choice) - 1
-        if 0 <= genre_idx < len(genres):
-            genre = Genre(genres[genre_idx])
-        else:
-            genre = Genre.OTHER
-    except ValueError:
-        # Try to match by name
-        genre_lower = genre_choice.lower()
-        try:
-            genre = Genre(genre_lower)
-        except ValueError:
-            genre = Genre.OTHER
-
-    # Target length
-    target_length_str = Prompt.ask(
-        "[bold]Target word count (optional)[/bold]",
-        default="",
-        console=console
-    )
-    target_length = int(target_length_str) if target_length_str else None
-
-    # Key elements
-    console.print("\n[bold]Key story elements (press Enter after each, empty line to finish):[/bold]")
-    key_elements = []
-    while True:
-        element = Prompt.ask("  Element", default="", console=console)
-        if not element:
-            break
-        key_elements.append(element)
-
-    # Character concepts
-    console.print("\n[bold]Character concepts (press Enter after each, empty line to finish):[/bold]")
-    character_concepts = []
-    while True:
-        concept = Prompt.ask("  Concept", default="", console=console)
-        if not concept:
-            break
-        character_concepts.append(concept)
-
-    # Desired theme
-    desired_theme = Prompt.ask(
-        "[bold]Desired theme (optional)[/bold]",
-        default="",
-        console=console
-    )
-    desired_theme = desired_theme if desired_theme else None
-
-    return NovelInput(
-        premise=premise,
-        genre=genre,
-        target_length=target_length,
-        key_elements=key_elements,
-        character_concepts=character_concepts,
-        desired_theme=desired_theme
-    )
-
-
-async def generate_outline(novel_input: NovelInput, config: dict) -> Optional[dict]:
-    """Generate novel outline"""
     # Create components
     llm_provider = create_llm_provider(config)
     structured_state, object_store, vector_store = create_storage(config)
 
-    # Create orchestrator
-    orchestrator = Orchestrator(
+    orchestrator = DocumentOrchestrator(
         llm_provider=llm_provider,
         structured_state=structured_state,
         vector_store=vector_store,
         config=config
     )
 
-    # Generate outline with progress
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task("Generating outline...", total=None)
-
-        try:
-            outline = await orchestrator.generate_outline(novel_input)
-            progress.update(task, description="Outline generated successfully!")
-            return outline
-        except Exception as e:
-            console.print(f"[red]Error generating outline: {str(e)}[/red]")
-            return None
-        finally:
-            # Close LLM provider session
-            await llm_provider.close()
+    try:
+        outline = await orchestrator.process_documents(
+            worldbuilding_path=worldbuilding,
+            characters_path=characters,
+            scenes_path=scenes,
+            novel_input=novel_input
+        )
+        return outline
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        import traceback
+        console.print(f"[red]{traceback.format_exc()}[/red]")
+        return None
+    finally:
+        await llm_provider.close()
 
 
 @click.command()
 @click.option(
-    "--premise",
-    type=str,
-    help="Novel premise (if not provided, will be prompted)"
+    '--worldbuilding',
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("input/worldbuilding.md"),
+    help="Path to worldbuilding markdown file (default: input/worldbuilding.md)"
 )
 @click.option(
-    "--genre",
-    type=click.Choice([g.value for g in Genre], case_sensitive=False),
-    help="Novel genre"
+    '--characters',
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("input/characters.md"),
+    help="Path to characters markdown file (default: input/characters.md)"
 )
 @click.option(
-    "--output",
+    '--scenes',
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("input/scenes.md"),
+    help="Path to scenes markdown file (default: input/scenes.md)"
+)
+@click.option(
+    '--output',
     type=click.Path(path_type=Path),
     default=Path("output"),
-    help="Output directory for generated outline"
+    help="Output directory for generated outline (default: output/)"
 )
 @click.option(
-    "--config",
+    '--config',
     type=click.Path(exists=True, path_type=Path),
-    help="Path to config file"
+    help="Path to config file (default: config/config.yaml)"
 )
-def main(premise: Optional[str], genre: Optional[str], output: Path, config: Optional[Path]):
-    """MultiWriter - Multi-Agent Novel Outline Generator"""
+def main(
+    worldbuilding: Path,
+    characters: Path,
+    scenes: Path,
+    output: Path,
+    config: Optional[Path]
+):
+    """MultiWriter - Document-Driven Novel Outline Generator
 
+    Generates a novel outline from three markdown input documents:
+    - worldbuilding.md: World rules, locations, magic systems, etc.
+    - characters.md: Character profiles, relationships, arcs
+    - scenes.md: Scene concepts, plot points, key moments
+
+    Example:
+        python -m src.cli.main
+    """
     # Load config
     if config:
         with open(config, "r", encoding="utf-8") as f:
@@ -239,38 +203,63 @@ def main(premise: Optional[str], genre: Optional[str], output: Path, config: Opt
     else:
         app_config = load_config()
 
-    # Collect novel input
-    if premise:
-        # Use provided premise
-        genre_enum = Genre(genre) if genre else Genre.OTHER
-        novel_input = NovelInput(
-            premise=premise,
-            genre=genre_enum
-        )
-    else:
-        # Collect interactively
-        novel_input = collect_novel_input()
+    # Verify input files exist (orchestrator will do detailed validation, but check basic existence here)
+    if not worldbuilding.exists():
+        console.print(f"[red]Error: Worldbuilding file not found: {worldbuilding}[/red]")
+        console.print(f"[yellow]Expected location: {worldbuilding.absolute()}[/yellow]")
+        logger.error(f"Worldbuilding file not found: {worldbuilding}")
+        return
 
-    # Display summary
+    if not characters.exists():
+        console.print(f"[red]Error: Characters file not found: {characters}[/red]")
+        console.print(f"[yellow]Expected location: {characters.absolute()}[/yellow]")
+        logger.error(f"Characters file not found: {characters}")
+        return
+
+    if not scenes.exists():
+        console.print(f"[red]Error: Scenes file not found: {scenes}[/red]")
+        console.print(f"[yellow]Expected location: {scenes.absolute()}[/yellow]")
+        logger.error(f"Scenes file not found: {scenes}")
+        return
+
+    # Display input summary
     console.print()
     console.print(Panel(
-        f"[bold]Premise:[/bold] {novel_input.premise}\n"
-        f"[bold]Genre:[/bold] {novel_input.genre.value}",
-        title="Novel Summary",
-        border_style="green"
+        "[bold blue]MultiWriter - Document-Driven Outline Generator[/bold blue]",
+        border_style="blue"
     ))
     console.print()
 
-    # Confirm
-    if not Confirm.ask("Generate outline with these parameters?", console=console):
-        console.print("[yellow]Cancelled[/yellow]")
-        return
+    console.print(Panel(
+        f"Worldbuilding: {worldbuilding}\n"
+        f"Characters: {characters}\n"
+        f"Scenes: {scenes}",
+        title="Input Documents",
+        border_style="cyan"
+    ))
+    console.print()
 
     # Generate outline
-    outline = asyncio.run(generate_outline(novel_input, app_config))
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console
+    ) as progress:
+        task = progress.add_task("Generating outline...", total=None)
+
+        outline = asyncio.run(generate_from_documents(
+            worldbuilding=worldbuilding,
+            characters=characters,
+            scenes=scenes,
+            output=output,
+            config=app_config
+        ))
+
+        progress.update(task, description="Complete!")
 
     if not outline:
         console.print("[red]Failed to generate outline[/red]")
+        logger.error("Failed to generate outline")
         return
 
     # Export to Markdown
@@ -297,11 +286,15 @@ def main(premise: Optional[str], genre: Optional[str], output: Path, config: Opt
     table.add_column("Component", style="cyan")
     table.add_column("Status", style="green")
 
-    table.add_row("Theme", "✓" if outline.theme else "✗")
-    table.add_row("Plot Structure", "✓" if outline.plot_structure else "✗")
-    table.add_row(f"Characters ({len(outline.characters) if outline.characters else 0})", "✓" if outline.characters else "✗")
-    table.add_row("World Rules", "✓" if outline.world_rules else "✗")
-    table.add_row(f"Scenes ({len(outline.scenes) if outline.scenes else 0})", "✓" if outline.scenes else "✗")
+    table.add_row(
+        "Entity Registry",
+        f"✓ {len(outline.entity_registry.entities) if outline.entity_registry else 0} entities"
+    )
+    table.add_row("Scenes", f"✓ {len(outline.scenes)}" if outline.scenes else "✗")
+    table.add_row(
+        "Arcs",
+        f"✓ {len(outline.relationships.get('arcs', []))}" if outline.relationships.get('arcs') else "✗"
+    )
 
     console.print()
     console.print(table)

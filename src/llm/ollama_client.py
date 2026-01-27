@@ -202,3 +202,28 @@ class OllamaClient(LLMProvider):
     def get_model_name(self) -> str:
         """Get the model name being used"""
         return self.model
+    
+    async def get_embedding(
+        self,
+        text: str,
+        model: str = "nomic-embed-text"
+    ) -> List[float]:
+        """Generate embedding for text using Ollama"""
+        session = await self._get_session()
+        
+        try:
+            async with session.post(
+                f"{self.base_url}/api/embeddings",
+                json={
+                    "model": model,
+                    "prompt": text
+                }
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                embedding = data.get("embedding", [])
+                if not embedding:
+                    raise RuntimeError("No embedding returned from Ollama")
+                return embedding
+        except Exception as e:
+            raise RuntimeError(f"Embedding generation failed: {str(e)}") from e
