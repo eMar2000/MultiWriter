@@ -1,0 +1,2 @@
+[console_scripts]
+multiwriter = src.cli.main:main

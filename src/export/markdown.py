@@ -64,7 +64,118 @@ class MarkdownExporter:
                     lines.append(f"- {constraint}")
                 lines.append("")
 
-        # Plot Structure
+        # STORY ARCS (Main outline content - put this first)
+        if outline.relationships and isinstance(outline.relationships, dict):
+            arcs = outline.relationships.get("arcs", [])
+            if arcs:
+                lines.append("## Story Arcs")
+                lines.append("")
+                for arc in arcs:
+                    arc_name = arc.get("name", "Unnamed Arc") if isinstance(arc, dict) else getattr(arc, "name", "Unnamed Arc")
+                    arc_desc = arc.get("description", "") if isinstance(arc, dict) else getattr(arc, "description", "")
+                    arc_type = arc.get("type", "main") if isinstance(arc, dict) else getattr(arc, "type", "main")
+                    lines.append(f"### {arc_name} ({arc_type})")
+                    lines.append("")
+                    if arc_desc:
+                        lines.append(arc_desc)
+                        lines.append("")
+
+                timeline = outline.relationships.get("timeline", [])
+                if timeline:
+                    lines.append("### Arc Timeline")
+                    lines.append("")
+                    for i, arc_id in enumerate(timeline, 1):
+                        lines.append(f"{i}. {arc_id}")
+                    lines.append("")
+
+        # SCENES (Main outline content - put this after arcs)
+        if outline.scenes:
+            lines.append("## Scene Outlines")
+            lines.append("")
+
+            for scene in outline.scenes:
+                # Handle both Pydantic models and dicts
+                if isinstance(scene, dict):
+                    scene_num = scene.get("scene_number", "?")
+                    scene_title = scene.get("title", f"Scene {scene_num}")
+                    scene_type = scene.get("scene_type", "action")
+                    scene_goal = scene.get("goal")
+                    scene_conflict = scene.get("conflict")
+                    scene_outcome = scene.get("outcome")
+                    scene_stakes = scene.get("stakes")
+                    scene_pov = scene.get("pov_character")
+                    scene_chars = scene.get("characters_present", [])
+                    scene_location = scene.get("location_id")
+                    scene_time = scene.get("time_period")
+                    scene_beats = scene.get("beats", [])
+                    tension_start = scene.get("tension_start", 0)
+                    tension_end = scene.get("tension_end", 0)
+                else:
+                    # Pydantic model
+                    scene_num = scene.scene_number if scene.scene_number else "?"
+                    scene_title = scene.title if scene.title else f"Scene {scene_num}"
+                    scene_type = scene.scene_type.value if scene.scene_type else "action"
+                    scene_goal = scene.goal
+                    scene_conflict = scene.conflict
+                    scene_outcome = scene.outcome
+                    scene_stakes = scene.stakes
+                    scene_pov = scene.pov_character
+                    scene_chars = scene.characters_present if scene.characters_present else []
+                    scene_location = scene.location_id
+                    scene_time = scene.time_period
+                    scene_beats = scene.beats if scene.beats else []
+                    tension_start = scene.tension_start if scene.tension_start else 0
+                    tension_end = scene.tension_end if scene.tension_end else 0
+
+                lines.append(f"### Scene {scene_num}: {scene_title} ({scene_type})")
+                lines.append("")
+
+                if scene_goal:
+                    lines.append(f"**Goal:** {scene_goal}")
+                if scene_conflict:
+                    lines.append(f"**Conflict:** {scene_conflict}")
+                if scene_outcome:
+                    lines.append(f"**Outcome:** {scene_outcome}")
+                if scene_stakes:
+                    lines.append(f"**Stakes:** {scene_stakes}")
+
+                lines.append("")
+
+                # Characters
+                if scene_pov:
+                    lines.append(f"**POV Character:** {scene_pov}")
+                if scene_chars:
+                    chars_str = ', '.join(scene_chars) if isinstance(scene_chars, list) else str(scene_chars)
+                    lines.append(f"**Characters Present:** {chars_str}")
+
+                lines.append("")
+
+                # Location and time
+                if scene_location:
+                    lines.append(f"**Location:** {scene_location}")
+                if scene_time:
+                    lines.append(f"**Time:** {scene_time}")
+
+                lines.append("")
+
+                # Scene beats
+                if scene_beats:
+                    lines.append("**Scene Beats:**")
+                    for beat in scene_beats:
+                        if isinstance(beat, dict):
+                            beat_num = beat.get("beat_number", "?")
+                            beat_desc = beat.get("description", "No description")
+                        else:
+                            beat_num = beat.beat_number if beat.beat_number else "?"
+                            beat_desc = beat.description if beat.description else "No description"
+                        lines.append(f"{beat_num}. {beat_desc}")
+                    lines.append("")
+
+                # Tension
+                lines.append(f"**Tension:** {tension_start:.2f} → {tension_end:.2f}")
+                lines.append("")
+
+        # Plot Structure (for interactive workflow - keep for compatibility)
         if outline.plot_structure:
             lines.append("## Plot Structure")
             lines.append("")
@@ -126,74 +237,86 @@ class MarkdownExporter:
                     lines.append(f"{i}. {reversal}")
                 lines.append("")
 
-        # Characters
-        if outline.characters:
-            lines.append("## Characters")
-            lines.append("")
-            for char in outline.characters:
-                # Handle both Pydantic models and dicts (from serialization)
-                if isinstance(char, dict):
-                    char_name = char.get("name", "Unknown")
-                    char_role = char.get("role", "unknown")
-                    char_want = char.get("want")
-                    char_need = char.get("need")
-                    char_lie = char.get("lie")
-                    char_fear = char.get("fear")
-                    char_arc_type = char.get("arc_type")
-                    char_starting = char.get("starting_point", "unknown")
-                    char_ending = char.get("ending_point", "unknown")
-                    char_personality = char.get("personality_summary")
-                    char_function = char.get("story_function")
-                    char_relationships = char.get("relationships")
-                else:
-                    # Pydantic model
-                    char_name = char.name if char.name else "Unknown"
-                    char_role = char.role if char.role else "unknown"
-                    char_want = char.want
-                    char_need = char.need
-                    char_lie = char.lie
-                    char_fear = char.fear
-                    char_arc_type = char.arc_type.value if char.arc_type else None
-                    char_starting = char.starting_point if char.starting_point else "unknown"
-                    char_ending = char.ending_point if char.ending_point else "unknown"
-                    char_personality = char.personality_summary
-                    char_function = char.story_function
-                    char_relationships = char.relationships
+        # --- APPENDIX: Reference Material (not part of outline) ---
+        lines.append("---")
+        lines.append("")
+        lines.append("# Appendix: Reference Material")
+        lines.append("")
 
-                lines.append(f"### {char_name} ({char_role})")
+        # Characters (only if detailed character profiles exist)
+        if outline.characters and len(outline.characters) > 0:
+            # Check if these are actual CharacterProfile objects or just entity references
+            first_char = outline.characters[0]
+            is_detailed = isinstance(first_char, dict) and any(k in first_char for k in ['want', 'need', 'lie', 'fear']) or \
+                         (hasattr(first_char, 'want') and first_char.want)
+
+            if is_detailed:
+                lines.append("## Character Profiles")
                 lines.append("")
+                for char in outline.characters:
+                    # Handle both Pydantic models and dicts (from serialization)
+                    if isinstance(char, dict):
+                        char_name = char.get("name", "Unknown")
+                        char_role = char.get("role", "unknown")
+                        char_want = char.get("want")
+                        char_need = char.get("need")
+                        char_lie = char.get("lie")
+                        char_fear = char.get("fear")
+                        char_arc_type = char.get("arc_type")
+                        char_starting = char.get("starting_point", "unknown")
+                        char_ending = char.get("ending_point", "unknown")
+                        char_personality = char.get("personality_summary")
+                        char_function = char.get("story_function")
+                        char_relationships = char.get("relationships")
+                    else:
+                        # Pydantic model
+                        char_name = char.name if char.name else "Unknown"
+                        char_role = char.role if char.role else "unknown"
+                        char_want = char.want
+                        char_need = char.need
+                        char_lie = char.lie
+                        char_fear = char.fear
+                        char_arc_type = char.arc_type.value if char.arc_type else None
+                        char_starting = char.starting_point if char.starting_point else "unknown"
+                        char_ending = char.ending_point if char.ending_point else "unknown"
+                        char_personality = char.personality_summary
+                        char_function = char.story_function
+                        char_relationships = char.relationships
 
-                if char_want:
-                    lines.append(f"**Want:** {char_want}")
-                if char_need:
-                    lines.append(f"**Need:** {char_need}")
-                if char_lie:
-                    lines.append(f"**Lie:** {char_lie}")
-                if char_fear:
-                    lines.append(f"**Fear:** {char_fear}")
-
-                lines.append("")
-
-                if char_arc_type:
-                    lines.append(f"**Arc:** {char_arc_type} - From {char_starting} to {char_ending}")
+                    lines.append(f"### {char_name} ({char_role})")
                     lines.append("")
 
-                if char_personality:
-                    lines.append(f"**Personality:** {char_personality}")
+                    if char_want:
+                        lines.append(f"**Want:** {char_want}")
+                    if char_need:
+                        lines.append(f"**Need:** {char_need}")
+                    if char_lie:
+                        lines.append(f"**Lie:** {char_lie}")
+                    if char_fear:
+                        lines.append(f"**Fear:** {char_fear}")
+
                     lines.append("")
 
-                if char_function:
-                    lines.append(f"**Story Function:** {char_function}")
-                    lines.append("")
+                    if char_arc_type:
+                        lines.append(f"**Arc:** {char_arc_type} - From {char_starting} to {char_ending}")
+                        lines.append("")
 
-                # Relationships
-                if char_relationships:
-                    lines.append("**Relationships:**")
-                    for other_char, relationship in char_relationships.items():
-                        lines.append(f"- {other_char}: {relationship}")
-                    lines.append("")
+                    if char_personality:
+                        lines.append(f"**Personality:** {char_personality}")
+                        lines.append("")
 
-        # World Building
+                    if char_function:
+                        lines.append(f"**Story Function:** {char_function}")
+                        lines.append("")
+
+                    # Relationships
+                    if char_relationships:
+                        lines.append("**Relationships:**")
+                        for other_char, relationship in char_relationships.items():
+                            lines.append(f"- {other_char}: {relationship}")
+                        lines.append("")
+
+        # World Building (only if detailed worldbuilding exists)
         if outline.world_rules:
             world = outline.world_rules
             lines.append("## World Building")
@@ -283,143 +406,36 @@ class MarkdownExporter:
                         lines.append(f"  {event_desc}")
                     lines.append("")
 
-        # Entity Registry (NEW - for document-driven outlines)
+        # Entity Registry (Reference material - in appendix, very compact)
         if outline.entity_registry:
             lines.append("## Entity Registry")
             lines.append("")
             lines.append(f"**Total Entities:** {len(outline.entity_registry.entities)}")
             lines.append("")
+            lines.append("*Reference list of entities extracted from input documents. This is not part of the outline - see Story Arcs and Scene Outlines above for the actual plot progression.*")
+            lines.append("")
 
-            # Group by type
+            # Group by type - compact format (just entity counts and sample names)
             from src.models import EntityType
             for entity_type in EntityType:
                 entities_of_type = outline.entity_registry.get_by_type(entity_type)
                 if entities_of_type:
                     # entity_type is an enum, get its value
-                    type_name = entity_type.value.title()
+                    type_name = entity_type.value.title().replace("_", " ")
+                    # Show only first 5 names as examples, then count
+                    entity_names = [e.name for e in entities_of_type[:5]]
+                    remaining = len(entities_of_type) - 5
+
                     lines.append(f"### {type_name}s ({len(entities_of_type)})")
-                    lines.append("")
-                    for entity in entities_of_type[:10]:  # Limit to first 10 per type
-                        lines.append(f"- **{entity.name}**: {entity.summary}")
-                    if len(entities_of_type) > 10:
-                        lines.append(f"  *... and {len(entities_of_type) - 10} more*")
-                    lines.append("")
-
-        # Arcs and Relationships (NEW - for document-driven outlines)
-        if outline.relationships and isinstance(outline.relationships, dict):
-            arcs = outline.relationships.get("arcs", [])
-            if arcs:
-                lines.append("## Story Arcs")
-                lines.append("")
-                for arc in arcs:
-                    arc_name = arc.get("name", "Unnamed Arc") if isinstance(arc, dict) else getattr(arc, "name", "Unnamed Arc")
-                    arc_desc = arc.get("description", "") if isinstance(arc, dict) else getattr(arc, "description", "")
-                    arc_type = arc.get("type", "main") if isinstance(arc, dict) else getattr(arc, "type", "main")
-                    lines.append(f"### {arc_name} ({arc_type})")
-                    lines.append("")
-                    if arc_desc:
-                        lines.append(arc_desc)
-                        lines.append("")
-
-                timeline = outline.relationships.get("timeline", [])
-                if timeline:
-                    lines.append("### Arc Timeline")
-                    lines.append("")
-                    for i, arc_id in enumerate(timeline, 1):
-                        lines.append(f"{i}. {arc_id}")
+                    if entity_names:
+                        names_str = ", ".join([f"**{name}**" for name in entity_names])
+                        if remaining > 0:
+                            names_str += f", *and {remaining} more*"
+                        lines.append(names_str)
                     lines.append("")
 
-        # Scenes
-        if outline.scenes:
-            lines.append("## Scene Outlines")
-            lines.append("")
-
-            for scene in outline.scenes:
-                # Handle both Pydantic models and dicts
-                if isinstance(scene, dict):
-                    scene_num = scene.get("scene_number", "?")
-                    scene_title = scene.get("title", f"Scene {scene_num}")
-                    scene_type = scene.get("scene_type", "action")
-                    scene_goal = scene.get("goal")
-                    scene_conflict = scene.get("conflict")
-                    scene_outcome = scene.get("outcome")
-                    scene_stakes = scene.get("stakes")
-                    scene_pov = scene.get("pov_character")
-                    scene_chars = scene.get("characters_present", [])
-                    scene_location = scene.get("location_id")
-                    scene_time = scene.get("time_period")
-                    scene_beats = scene.get("beats", [])
-                    tension_start = scene.get("tension_start", 0)
-                    tension_end = scene.get("tension_end", 0)
-                else:
-                    # Pydantic model
-                    scene_num = scene.scene_number if scene.scene_number else "?"
-                    scene_title = scene.title if scene.title else f"Scene {scene_num}"
-                    scene_type = scene.scene_type.value if scene.scene_type else "action"
-                    scene_goal = scene.goal
-                    scene_conflict = scene.conflict
-                    scene_outcome = scene.outcome
-                    scene_stakes = scene.stakes
-                    scene_pov = scene.pov_character
-                    scene_chars = scene.characters_present if scene.characters_present else []
-                    scene_location = scene.location_id
-                    scene_time = scene.time_period
-                    scene_beats = scene.beats if scene.beats else []
-                    tension_start = scene.tension_start if scene.tension_start else 0
-                    tension_end = scene.tension_end if scene.tension_end else 0
-
-                lines.append(f"### Scene {scene_num}: {scene_title} ({scene_type})")
-                lines.append("")
-
-                if scene_goal:
-                    lines.append(f"**Goal:** {scene_goal}")
-                if scene_conflict:
-                    lines.append(f"**Conflict:** {scene_conflict}")
-                if scene_outcome:
-                    lines.append(f"**Outcome:** {scene_outcome}")
-                if scene_stakes:
-                    lines.append(f"**Stakes:** {scene_stakes}")
-
-                lines.append("")
-
-                # Characters
-                if scene_pov:
-                    lines.append(f"**POV Character:** {scene_pov}")
-                if scene_chars:
-                    chars_str = ', '.join(scene_chars) if isinstance(scene_chars, list) else str(scene_chars)
-                    lines.append(f"**Characters Present:** {chars_str}")
-
-                lines.append("")
-
-                # Location and time
-                if scene_location:
-                    lines.append(f"**Location:** {scene_location}")
-                if scene_time:
-                    lines.append(f"**Time:** {scene_time}")
-
-                lines.append("")
-
-                # Scene beats
-                if scene_beats:
-                    lines.append("**Scene Beats:**")
-                    for beat in scene_beats:
-                        if isinstance(beat, dict):
-                            beat_num = beat.get("beat_number", "?")
-                            beat_desc = beat.get("description", "No description")
-                        else:
-                            beat_num = beat.beat_number if beat.beat_number else "?"
-                            beat_desc = beat.description if beat.description else "No description"
-                        lines.append(f"{beat_num}. {beat_desc}")
-                    lines.append("")
-
-                # Tension
-                lines.append(f"**Tension:** {tension_start:.2f} → {tension_end:.2f}")
-                lines.append("")
-
-        # Metadata
+        # Metadata (if any)
         if outline.metadata:
-            lines.append("---")
-            lines.append("")
             lines.append("## Metadata")
             lines.append("")
             for key, value in outline.metadata.items():

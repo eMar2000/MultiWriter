@@ -1,4 +1,4 @@
-"""Tests for Pydantic models"""
+"""Tests for Pydantic schemas"""
 
 import pytest
 from src.models import (
@@ -17,7 +17,7 @@ from src.models import (
 
 
 def test_novel_input():
-    """Test NovelInput model"""
+    """Test NovelInput schema"""
     novel_input = NovelInput(
         premise="Test premise",
         genre=Genre.FANTASY
@@ -30,7 +30,7 @@ def test_novel_input():
 
 
 def test_theme_statement():
-    """Test ThemeStatement model"""
+    """Test ThemeStatement schema"""
     theme = ThemeStatement(
         premise="Test premise",
         theme_question="What is the meaning?",
@@ -44,7 +44,7 @@ def test_theme_statement():
 
 
 def test_plot_structure():
-    """Test PlotStructure model"""
+    """Test PlotStructure schema"""
     beat = PlotBeat(
         beat_number=1,
         beat_name="Opening",
@@ -64,7 +64,7 @@ def test_plot_structure():
 
 
 def test_character_profile():
-    """Test CharacterProfile model"""
+    """Test CharacterProfile schema"""
     character = CharacterProfile(
         id="char1",
         name="Test Character",
@@ -90,7 +90,7 @@ def test_character_profile():
 
 
 def test_world_building():
-    """Test WorldBuilding model"""
+    """Test WorldBuilding schema"""
     world = WorldBuilding(
         current_period="Present day",
         rules=[],
@@ -108,7 +108,7 @@ def test_world_building():
 
 
 def test_scene_outline():
-    """Test SceneOutline model"""
+    """Test SceneOutline schema"""
     scene = SceneOutline(
         scene_id="scene1",
         scene_number=1,

@@ -1,23 +1,27 @@
-"""Agent implementations for novel outline generation"""
+"""Agent implementations for novel outline generation (planning loop)"""
 
 from .base import BaseAgent
-from .theme_premise import ThemePremiseAgent
-from .narrative_architect import NarrativeArchitectAgent
-from .character import CharacterAgent
-from .worldbuilding import WorldbuildingAgent
-from .scene_dynamics import SceneDynamicsAgent
 from .synthesis import SynthesisAgent
 from .outline_architect import OutlineArchitectAgent
 from .coverage_verifier import CoverageVerifierAgent
+from .scene_dynamics import SceneDynamicsAgent
+from .timeline_manager import TimelineManagerAgent
+from .pacing_agent import PacingAgent
+from .theme_guardian import ThemeGuardianAgent
+from .foreshadowing_agent import ForeshadowingAgent
+from .character_planner import CharacterPlannerAgent
+from .idea_generator import IdeaGeneratorAgent
 
 __all__ = [
     "BaseAgent",
-    "ThemePremiseAgent",
-    "NarrativeArchitectAgent",
-    "CharacterAgent",
-    "WorldbuildingAgent",
-    "SceneDynamicsAgent",
     "SynthesisAgent",
     "OutlineArchitectAgent",
     "CoverageVerifierAgent",
+    "SceneDynamicsAgent",
+    "TimelineManagerAgent",
+    "PacingAgent",
+    "ThemeGuardianAgent",
+    "ForeshadowingAgent",
+    "CharacterPlannerAgent",
+    "IdeaGeneratorAgent",
 ]

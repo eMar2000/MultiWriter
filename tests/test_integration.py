@@ -1,15 +1,17 @@
-"""Integration tests for end-to-end outline generation"""
+"""Integration tests for document-driven outline generation and planning agents"""
 
 import pytest
 import asyncio
 from pathlib import Path
 import uuid
-from typing import Dict, Any
+from datetime import datetime, timezone
 
-from src.models import NovelInput, Genre
+from src.models import NovelInput, Genre, EntityRegistry, EntitySummary, EntityType
+from src.models import NovelOutline, SceneOutline, SceneType
 from src.llm import OllamaClient
-from src.memory import DynamoDBState, QdrantVectorStore
-from src.orchestrator import Orchestrator
+from src.memory import LocalFileState, LocalObjectStore, InMemoryGraphStore
+from src.validation import ContinuityValidationService
+from src.orchestrator import IterativeDocumentOrchestrator
 from src.export import MarkdownExporter
 
 
@@ -23,17 +25,14 @@ def test_config():
             "timeout": 300
         },
         "storage": {
-            "dynamodb": {
-                "region": "us-east-1",
-                "endpoint_url": None,
-                "table_prefix": "test_"
-            },
-            "qdrant": {
-                "host": "localhost",
-                "port": 6333,
-                "collection_name": "test-multiwriter-embeddings",
-                "vector_size": 768
+            "provider": "local",
+            "local": {
+                "data_dir": "./data_test",
+                "objects_dir": "./data_test/objects"
             }
+        },
+        "graph": {
+            "provider": "in_memory"
         }
     }
 
@@ -51,212 +50,80 @@ def test_llm_provider(test_config):
 
 @pytest.fixture
 def test_storage(test_config):
-    """Create test storage instances"""
-    storage_config = test_config["storage"]
-
-    # DynamoDB (using endpoint_url=None for testing - would need localstack for actual tests)
-    dynamodb_config = storage_config["dynamodb"]
-    structured_state = DynamoDBState(
-        region=dynamodb_config["region"],
-        endpoint_url=dynamodb_config["endpoint_url"],
-        table_prefix=dynamodb_config["table_prefix"]
+    """Create test storage instances (local + in-memory graph for planning loop)"""
+    storage_config = test_config["storage"].get("local", {})
+    structured_state = LocalFileState(
+        storage_dir=storage_config.get("data_dir", "./data_test")
     )
-
-    # Qdrant
-    qdrant_config = storage_config["qdrant"]
-    vector_store = QdrantVectorStore(
-        host=qdrant_config["host"],
-        port=qdrant_config["port"],
-        collection_name=qdrant_config["collection_name"],
-        vector_size=qdrant_config["vector_size"]
+    object_store = LocalObjectStore(
+        storage_dir=storage_config.get("objects_dir", "./data_test/objects")
     )
+    vector_store = None  # Optional for tests
+    graph_store = InMemoryGraphStore()
+    validation_service = ContinuityValidationService(graph_store=graph_store)
+    return structured_state, object_store, vector_store, graph_store, validation_service
 
-    return structured_state, vector_store
+
+@pytest.fixture
+def test_storage_simple(test_config):
+    """Minimal storage for agent-only tests (no graph)."""
+    storage_config = test_config["storage"].get("local", {})
+    structured_state = LocalFileState(
+        storage_dir=storage_config.get("data_dir", "./data_test")
+    )
+    return structured_state, None  # vector_store optional
 
 
 @pytest.mark.asyncio
-async def test_theme_premise_agent(test_llm_provider, test_storage):
-    """Test Theme & Premise agent"""
-    structured_state, vector_store = test_storage
+@pytest.mark.skip(reason="Requires Ollama - run manually")
+async def test_synthesis_agent(test_llm_provider, test_storage_simple):
+    """Test Synthesis agent with minimal registry"""
+    structured_state, vector_store = test_storage_simple
 
-    from src.agents import ThemePremiseAgent
+    from src.agents import SynthesisAgent
 
     novel_id = str(uuid.uuid4())
-    agent = ThemePremiseAgent(
+    agent = SynthesisAgent(
         llm_provider=test_llm_provider,
         structured_state=structured_state,
         vector_store=vector_store,
         novel_id=novel_id
     )
 
-    novel_input = NovelInput(
-        premise="A detective must solve a murder while their own memories are being erased.",
-        genre=Genre.MYSTERY
-    )
+    registry = EntityRegistry(entities={
+        "char1": EntitySummary(
+            id="char1",
+            name="Hero",
+            entity_type=EntityType.CHARACTER,
+            summary="The protagonist",
+            source_doc="characters"
+        ),
+        "loc1": EntitySummary(
+            id="loc1",
+            name="Castle",
+            entity_type=EntityType.LOCATION,
+            summary="Ancient castle",
+            source_doc="worldbuilding"
+        )
+    })
 
     context = {
-        "novel_input": novel_input.model_dump()
+        "entity_registry": registry,
+        "novel_input": {"premise": "A hero saves the kingdom.", "genre": "fantasy"}
     }
 
     result = await agent.execute(context)
 
-    assert result["status"] == "success"
-    assert "theme" in result["output"]
-    assert result["output"]["theme"].get("premise")
-    assert result["output"]["theme"].get("theme_question")
-
-    # Cleanup
+    assert "output" in result
+    assert "relationships" in result["output"] or "themes" in result["output"] or "conflicts" in result["output"]
     await test_llm_provider.close()
 
 
 @pytest.mark.asyncio
-async def test_narrative_architect_agent(test_llm_provider, test_storage):
-    """Test Narrative Architect agent"""
-    structured_state, vector_store = test_storage
-
-    from src.agents import NarrativeArchitectAgent
-
-    novel_id = str(uuid.uuid4())
-    agent = NarrativeArchitectAgent(
-        llm_provider=test_llm_provider,
-        structured_state=structured_state,
-        vector_store=vector_store,
-        novel_id=novel_id
-    )
-
-    novel_input = NovelInput(
-        premise="A young wizard discovers they have the power to travel between parallel worlds.",
-        genre=Genre.FANTASY
-    )
-
-    theme_data = {
-        "premise": novel_input.premise,
-        "theme_question": "What does it mean to belong in a world where you could be anywhere?",
-        "moral_argument": "Belonging is a choice, not a birthright",
-        "thematic_constraints": []
-    }
-
-    context = {
-        "novel_input": novel_input.model_dump(),
-        "theme": theme_data
-    }
-
-    result = await agent.execute(context)
-
-    assert result["status"] == "success"
-    assert "plot_structure" in result["output"]
-    assert result["output"]["plot_structure"].get("structure_type")
-    assert result["output"]["plot_structure"].get("beats")
-
-    # Cleanup
-    await test_llm_provider.close()
-
-
-@pytest.mark.asyncio
-async def test_character_agent(test_llm_provider, test_storage):
-    """Test Character agent"""
-    structured_state, vector_store = test_storage
-
-    from src.agents import CharacterAgent
-
-    novel_id = str(uuid.uuid4())
-    agent = CharacterAgent(
-        llm_provider=test_llm_provider,
-        structured_state=structured_state,
-        vector_store=vector_store,
-        novel_id=novel_id
-    )
-
-    novel_input = NovelInput(
-        premise="A retired assassin must protect their family from their past.",
-        genre=Genre.THRILLER
-    )
-
-    theme_data = {
-        "theme_question": "Can we escape our past?",
-        "moral_argument": "Redemption requires facing, not running from, the past"
-    }
-
-    plot_structure = {
-        "structure_type": "three_act",
-        "beats": [
-            {
-                "beat_number": 1,
-                "beat_name": "Inciting Incident",
-                "description": "Assassin's past catches up",
-                "tension_level": 0.3,
-                "purpose": "Begin the story",
-                "required_elements": []
-            }
-        ]
-    }
-
-    context = {
-        "novel_input": novel_input.model_dump(),
-        "theme": theme_data,
-        "plot_structure": plot_structure
-    }
-
-    result = await agent.execute(context)
-
-    assert result["status"] == "success"
-    assert "characters" in result["output"]
-    assert isinstance(result["output"]["characters"], list)
-
-    # Cleanup
-    await test_llm_provider.close()
-
-
-@pytest.mark.asyncio
-async def test_worldbuilding_agent(test_llm_provider, test_storage):
-    """Test Worldbuilding agent"""
-    structured_state, vector_store = test_storage
-
-    from src.agents import WorldbuildingAgent
-
-    novel_id = str(uuid.uuid4())
-    agent = WorldbuildingAgent(
-        llm_provider=test_llm_provider,
-        structured_state=structured_state,
-        vector_store=vector_store,
-        novel_id=novel_id
-    )
-
-    novel_input = NovelInput(
-        premise="In a world where magic is controlled by corporations, a rogue mage fights for freedom.",
-        genre=Genre.FANTASY
-    )
-
-    theme_data = {
-        "theme_question": "What is the cost of freedom?",
-        "moral_argument": "Freedom requires sacrifice"
-    }
-
-    plot_structure = {
-        "structure_type": "three_act",
-        "beats": []
-    }
-
-    context = {
-        "novel_input": novel_input.model_dump(),
-        "theme": theme_data,
-        "plot_structure": plot_structure
-    }
-
-    result = await agent.execute(context)
-
-    assert result["status"] == "success"
-    assert "world" in result["output"]
-    assert result["output"]["world"].get("current_period")
-
-    # Cleanup
-    await test_llm_provider.close()
-
-
-@pytest.mark.asyncio
-async def test_scene_dynamics_agent(test_llm_provider, test_storage):
-    """Test Scene Dynamics agent"""
-    structured_state, vector_store = test_storage
+@pytest.mark.skip(reason="Requires Ollama - run manually")
+async def test_scene_dynamics_agent(test_llm_provider, test_storage_simple):
+    """Test Scene Dynamics agent with document-driven context (arc + entity_registry)"""
+    structured_state, vector_store = test_storage_simple
 
     from src.agents import SceneDynamicsAgent
 
@@ -270,122 +137,138 @@ async def test_scene_dynamics_agent(test_llm_provider, test_storage):
 
     novel_input = NovelInput(
         premise="Two rival chefs compete in a high-stakes cooking competition.",
-        genre=Genre.CONTEMPORARY
+        genre=Genre.OTHER
     )
 
-    theme_data = {
-        "theme_question": "What defines success?",
-        "moral_argument": "Success is personal growth, not victory"
+    arc = {
+        "id": "arc_1",
+        "name": "Competition Arc",
+        "description": "Chefs compete for the title",
+        "type": "main",
+        "character_ids": ["char1"],
+        "location_ids": ["loc1"],
+        "scene_concept_ids": [],
+        "estimated_chapters": 3
     }
 
-    plot_structure = {
-        "structure_type": "three_act",
-        "beats": [
-            {
-                "beat_number": 1,
-                "beat_name": "Opening",
-                "description": "Competition announced",
-                "tension_level": 0.2,
-                "purpose": "Set up story",
-                "required_elements": []
-            }
-        ]
-    }
-
-    characters = [
-        {
-            "id": "char1",
-            "name": "Chef A",
-            "role": "protagonist",
-            "want": "Win competition",
-            "need": "Self-worth",
-            "lie": "I'm only valuable if I win",
-            "fear": "Failure",
-            "belief": "Success is everything",
-            "arc_type": "positive",
-            "starting_point": "Defined by competition",
-            "ending_point": "Defined by growth",
-            "personality_summary": "Intense, driven",
-            "story_function": "Main character",
-            "conflicts": [],
-            "skills": [],
-            "weaknesses": []
-        }
-    ]
-
-    world = {
-        "current_period": "Present day",
-        "rules": [],
-        "locations": [
-            {
-                "location_id": "loc1",
-                "name": "Kitchen Arena",
-                "type": "competition venue",
-                "description": "High-tech cooking arena"
-            }
-        ],
-        "timeline": []
-    }
+    registry = EntityRegistry(entities={
+        "char1": EntitySummary(
+            id="char1",
+            name="Chef A",
+            entity_type=EntityType.CHARACTER,
+            summary="The protagonist chef",
+            source_doc="characters"
+        ),
+        "loc1": EntitySummary(
+            id="loc1",
+            name="Kitchen Arena",
+            entity_type=EntityType.LOCATION,
+            summary="High-tech cooking arena",
+            source_doc="worldbuilding"
+        )
+    })
 
     context = {
         "novel_input": novel_input.model_dump(),
-        "theme": theme_data,
-        "plot_structure": plot_structure,
-        "characters": characters,
-        "world": world
+        "arc": arc,
+        "entity_registry": registry
     }
 
     result = await agent.execute(context)
 
-    assert result["status"] == "success"
+    assert "output" in result
     assert "scenes" in result["output"]
     assert isinstance(result["output"]["scenes"], list)
-
-    # Cleanup
     await test_llm_provider.close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires Ollama and full setup - run manually")
-async def test_full_outline_generation(test_llm_provider, test_storage):
-    """Test full end-to-end outline generation"""
-    structured_state, vector_store = test_storage
+async def test_full_outline_generation(test_llm_provider, test_storage, test_config):
+    """Test full end-to-end outline generation with IterativeDocumentOrchestrator"""
+    (structured_state, object_store, vector_store,
+     graph_store, validation_service) = test_storage
 
     novel_input = NovelInput(
-        premise="A time traveler must prevent a catastrophic event while avoiding creating paradoxes.",
+        premise="A time traveler must prevent a catastrophic event.",
         genre=Genre.SCIFI,
-        key_elements=["time travel", "paradoxes", "catastrophe"],
-        character_concepts=["brilliant scientist", "skeptical observer"]
+        key_elements=["time travel", "paradoxes"],
+        character_concepts=["scientist", "observer"]
     )
 
-    orchestrator = Orchestrator(
+    # Use real input paths if available; otherwise test will need to be run with fixtures
+    base = Path(__file__).parent.parent
+    worldbuilding_path = base / "input" / "worldbuilding.md"
+    characters_path = base / "input" / "characters.md"
+    scenes_path = base / "input" / "scenes.md"
+    if not worldbuilding_path.exists() or not characters_path.exists() or not scenes_path.exists():
+        pytest.skip("Input documents not found (input/worldbuilding.md, characters.md, scenes.md)")
+
+    orchestrator = IterativeDocumentOrchestrator(
         llm_provider=test_llm_provider,
         structured_state=structured_state,
-        vector_store=vector_store
+        vector_store=vector_store,
+        graph_store=graph_store,
+        validation_service=validation_service,
+        config=test_config
     )
 
-    outline = await orchestrator.generate_outline(novel_input)
+    outline = await orchestrator.process_documents(
+        worldbuilding_path=worldbuilding_path,
+        characters_path=characters_path,
+        scenes_path=scenes_path,
+        novel_input=novel_input
+    )
 
     assert outline is not None
-    assert outline.theme is not None
-    assert outline.plot_structure is not None
-    assert outline.characters is not None
-    assert outline.world_rules is not None
     assert outline.scenes is not None
+    assert outline.input is not None
 
-    # Test export
     exporter = MarkdownExporter()
     markdown = exporter.export(outline)
     assert len(markdown) > 0
-    assert "Premise" in markdown
+    assert "Premise" in markdown or outline.input.premise[:30] in markdown
 
-    # Cleanup
     await test_llm_provider.close()
 
 
-def test_markdown_export():
-    """Test Markdown export functionality"""
-    from src.models import NovelOutline, NovelInput, Genre, ThemeStatement, PlotStructure
+def test_markdown_export_document_driven():
+    """Test Markdown export with document-driven outline (relationships, scenes)"""
+    from src.models import NovelInput, NovelOutline
+
+    novel_input = NovelInput(
+        premise="Test premise for export",
+        genre=Genre.FANTASY
+    )
+
+    outline = NovelOutline(
+        id="test_id",
+        input=novel_input,
+        scenes=[],
+        relationships={
+            "arcs": [
+                {"id": "arc_1", "name": "Arc One", "description": "First arc", "type": "main"}
+            ],
+            "timeline": ["arc_1"],
+            "themes": []
+        },
+        entity_registry=None,
+        status="completed",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc)
+    )
+
+    exporter = MarkdownExporter()
+    markdown = exporter.export(outline)
+
+    assert "Test premise for export" in markdown
+    assert "Story Arcs" in markdown or "Arc One" in markdown
+    assert "Arc One" in markdown
+
+
+def test_markdown_export_with_theme():
+    """Test Markdown export when theme is present (backward-compatible shape)"""
+    from src.models import NovelInput, NovelOutline, ThemeStatement, PlotStructure
 
     novel_input = NovelInput(
         premise="Test premise for export",
@@ -403,7 +286,12 @@ def test_markdown_export():
         plot_structure=PlotStructure(
             structure_type="three_act",
             beats=[]
-        )
+        ),
+        scenes=[],
+        relationships={},
+        status="draft",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc)
     )
 
     exporter = MarkdownExporter()

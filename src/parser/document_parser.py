@@ -22,7 +22,9 @@ class DocumentParser:
     """Parse markdown documents into structured sections"""
 
     def __init__(self):
+        # Support both markdown headers (# Title) and bracket notation ([Title])
         self.header_pattern = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
+        self.bracket_pattern = re.compile(r'^\[([^\]]+)\]$', re.MULTILINE)
 
     def parse_file(self, file_path: Path) -> List[ParsedSection]:
         """Parse a markdown file into sections
@@ -61,6 +63,7 @@ class DocumentParser:
         while i < len(lines):
             line = lines[i]
             header_match = self.header_pattern.match(line)
+            bracket_match = self.bracket_pattern.match(line.strip())
 
             if header_match:
                 level = len(header_match.group(1))
@@ -70,8 +73,9 @@ class DocumentParser:
                 content_lines = []
                 j = i + 1
                 while j < len(lines):
-                    next_match = self.header_pattern.match(lines[j])
-                    if next_match:
+                    next_header = self.header_pattern.match(lines[j])
+                    next_bracket = self.bracket_pattern.match(lines[j].strip())
+                    if next_header or next_bracket:
                         break
                     content_lines.append(lines[j])
                     j += 1
@@ -82,6 +86,43 @@ class DocumentParser:
                     content='\n'.join(content_lines).strip(),
                     children=[],
                     metadata={'source_line': i + 1},
+                    start_line=i + 1,
+                    end_line=j
+                )
+
+                # Build hierarchy
+                while section_stack and section_stack[-1].level >= level:
+                    section_stack.pop()
+
+                if section_stack:
+                    section_stack[-1].children.append(section)
+                else:
+                    sections.append(section)
+
+                section_stack.append(section)
+                i = j
+            elif bracket_match:
+                # Handle bracket notation [Title] as level 2 headers
+                title = bracket_match.group(1).strip()
+                level = 2  # Treat bracket sections as level 2
+
+                # Collect content until next header or bracket
+                content_lines = []
+                j = i + 1
+                while j < len(lines):
+                    next_header = self.header_pattern.match(lines[j])
+                    next_bracket = self.bracket_pattern.match(lines[j].strip())
+                    if next_header or next_bracket:
+                        break
+                    content_lines.append(lines[j])
+                    j += 1
+
+                section = ParsedSection(
+                    title=title,
+                    level=level,
+                    content='\n'.join(content_lines).strip(),
+                    children=[],
+                    metadata={'source_line': i + 1, 'format': 'bracket'},
                     start_line=i + 1,
                     end_line=j
                 )

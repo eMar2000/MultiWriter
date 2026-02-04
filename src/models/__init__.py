@@ -1,4 +1,4 @@
-"""Pydantic models for MultiWriter"""
+"""Pydantic schemas for MultiWriter data structures"""
 
 from .input import NovelInput, Genre
 from .theme import ThemeStatement
@@ -8,6 +8,15 @@ from .world import WorldBuilding, WorldRule, Location, MagicSystem, TimelineEven
 from .scene import SceneOutline, SceneType, SequelType, SceneBeat
 from .outline import NovelOutline
 from .entity import EntitySummary, EntityRegistry, EntityType
+from .canon import (
+    CanonNode,
+    CanonEdge,
+    CanonQuery,
+    TimelineQuery,
+    ValidationResult,
+    NodeType,
+    EdgeType
+)
 
 __all__ = [
     # Input
@@ -40,4 +49,12 @@ __all__ = [
     "EntitySummary",
     "EntityRegistry",
     "EntityType",
+    # Canon Store
+    "CanonNode",
+    "CanonEdge",
+    "CanonQuery",
+    "TimelineQuery",
+    "ValidationResult",
+    "NodeType",
+    "EdgeType",
 ]

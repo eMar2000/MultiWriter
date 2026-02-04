@@ -1,16 +1,26 @@
 """Orchestration logic for multi-agent workflows"""
 
-from .orchestrator_v2 import DocumentOrchestrator
+from .document_orchestrator import IterativeDocumentOrchestrator
+from .central_manager import CentralManager, AgentTask, AgentStatus
+from .planning_loop import PlanningLoop, QualityGate
+from .observability_manager import ObservabilityManager, Alert
+from .user_interaction_manager import UserInteractionManager, ApprovalRequest
+from .version_manager import VersionManager
 
-# Old orchestrator deprecated - kept for backward compatibility with tests only
-from .orchestrator import Orchestrator  # noqa: F401
-from .workflow import Workflow, AgentTask, AgentStatus  # noqa: F401
+# Alias for compatibility
+DocumentOrchestrator = IterativeDocumentOrchestrator
 
 __all__ = [
     "DocumentOrchestrator",
-    # Deprecated - use DocumentOrchestrator instead
-    "Orchestrator",
-    "Workflow",
+    "IterativeDocumentOrchestrator",
+    "CentralManager",
     "AgentTask",
     "AgentStatus",
+    "PlanningLoop",
+    "QualityGate",
+    "ObservabilityManager",
+    "Alert",
+    "UserInteractionManager",
+    "ApprovalRequest",
+    "VersionManager",
 ]

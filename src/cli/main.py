@@ -5,16 +5,15 @@ import logging
 from pathlib import Path
 from typing import Optional
 import click
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from src.models import NovelInput, Genre
-from src.llm import OllamaClient
-from src.memory import LocalFileState, LocalObjectStore, QdrantVectorStore
-from src.orchestrator import DocumentOrchestrator
 from src.export import MarkdownExporter
+from src.api import run_planning
 
 
 console = Console()
@@ -45,68 +44,6 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def create_llm_provider(config: dict) -> OllamaClient:
-    """Create LLM provider from config"""
-    llm_config = config.get("llm", {})
-    return OllamaClient(
-        model=llm_config.get("model", "llama3.1:70b"),
-        base_url=llm_config.get("base_url", "http://localhost:11434"),
-        timeout=llm_config.get("timeout", 300)
-    )
-
-
-def create_storage(config: dict):
-    """Create storage instances from config"""
-    storage_config = config.get("storage", {})
-
-    # Check storage provider (default to local)
-    provider = storage_config.get("provider", "local")
-
-    if provider == "local":
-        # Local file-based storage
-        local_config = storage_config.get("local", {})
-        structured_state = LocalFileState(
-            storage_dir=local_config.get("data_dir", "./data")
-        )
-        object_store = LocalObjectStore(
-            storage_dir=local_config.get("objects_dir", "./data/objects")
-        )
-    else:
-        # AWS storage (DynamoDB + S3) - requires credentials
-        from src.memory import DynamoDBState, S3ObjectStore
-
-        dynamodb_config = storage_config.get("dynamodb", {})
-        structured_state = DynamoDBState(
-            region=dynamodb_config.get("region", "us-east-1"),
-            endpoint_url=dynamodb_config.get("endpoint_url"),
-            table_prefix=""
-        )
-
-        s3_config = storage_config.get("s3", {})
-        object_store = S3ObjectStore(
-            bucket=s3_config.get("bucket", "multiwriter-outlines"),
-            region=s3_config.get("region", "us-east-1"),
-            endpoint_url=s3_config.get("endpoint_url")
-        )
-
-    # Qdrant (optional - gracefully handle if not available)
-    vector_store = None
-    qdrant_config = storage_config.get("qdrant", {})
-    if qdrant_config.get("enabled", False):
-        try:
-            vector_store = QdrantVectorStore(
-                host=qdrant_config.get("host", "localhost"),
-                port=qdrant_config.get("port", 6333),
-                collection_name=qdrant_config.get("collection_name", "multiwriter-embeddings"),
-                vector_size=qdrant_config.get("vector_size", 768)
-            )
-        except Exception:
-            # Qdrant not available, continue without vector store
-            pass
-
-    return structured_state, object_store, vector_store
-
-
 async def generate_from_documents(
     worldbuilding: Path,
     characters: Path,
@@ -114,30 +51,14 @@ async def generate_from_documents(
     output: Path,
     config: dict
 ) -> Optional[dict]:
-    """Generate outline from document inputs"""
-    # Build novel input (minimal - documents contain the info)
-    novel_input = NovelInput(
-        premise="Generated from documents",
-        genre=Genre.OTHER
-    )
-
-    # Create components
-    llm_provider = create_llm_provider(config)
-    structured_state, object_store, vector_store = create_storage(config)
-
-    orchestrator = DocumentOrchestrator(
-        llm_provider=llm_provider,
-        structured_state=structured_state,
-        vector_store=vector_store,
-        config=config
-    )
-
+    """Generate outline from document inputs (delegates to run_planning)."""
     try:
-        outline = await orchestrator.process_documents(
+        outline = await run_planning(
             worldbuilding_path=worldbuilding,
             characters_path=characters,
             scenes_path=scenes,
-            novel_input=novel_input
+            novel_input=NovelInput(premise="Generated from documents", genre=Genre.OTHER),
+            config=config
         )
         return outline
     except Exception as e:
@@ -145,8 +66,6 @@ async def generate_from_documents(
         import traceback
         console.print(f"[red]{traceback.format_exc()}[/red]")
         return None
-    finally:
-        await llm_provider.close()
 
 
 @click.command()

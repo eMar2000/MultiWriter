@@ -2,7 +2,7 @@
 
 from enum import Enum
 from typing import List, Dict, Optional, Set
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import uuid
 
 
@@ -27,8 +27,7 @@ class EntitySummary(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Tags for categorization")
     source_doc: Optional[str] = Field(default=None, description="Source document")
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class EntityRegistry(BaseModel):
