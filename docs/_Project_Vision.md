@@ -1,7 +1,20 @@
 # Multi-Agent AI Storyteller
 
-!!!
-This is the central overview document / roadmap for our entire project. The information in here superceeds all other documents in this project.
+============================
+      !!!!ATTENTION!!!!
+============================
+
+DO NOT DELETE!!!
+
+This is the north star / central overview / roadmap document for our entire project.
+
+AI coding Agents should NOT modify this document unless explicitly specified.
+
+When beggining a new AI coding session, AI coding agents should review this document for context of our end goal.
+
+Then AI agents should activly explore the codebase to get an understanding of current state, and what needs to be done.
+
+============================
 
 ## System Architecture & Proposition Document (v3)
 
@@ -232,10 +245,48 @@ World Registry:
 
 ## 4. Core Infrastructure & Storage Layer
 
+### 4.0 CRITICAL: Document Chunking & LLM Context Management
+
+**Problem Identified**: Large input documents (65+ entities, 19K+ chars) overwhelm LLMs, causing:
+- Empty or malformed JSON responses
+- Schema mismatches (wrong keys in returned JSON)
+- Context truncation and poor quality outputs
+
+**Required Solution - Document Chunking Strategy**:
+
+1. **Input Document Chunking** (`DocumentChunker` utility):
+   - Split large markdown documents into semantic chunks BEFORE entity extraction
+   - Target: 500-1000 tokens per chunk (well under 4K limit)
+   - Preserve semantic boundaries (character profiles, location descriptions, event sequences)
+   - Add overlap between chunks to maintain context continuity
+
+2. **Batched Entity Processing** (Update `SynthesisAgent`, `OutlineArchitect`):
+   - Process entity registry in batches of 10-15 entities per LLM call
+   - Aggregate results across batches
+   - Provide summarized synthesis to downstream agents, not raw entity dumps
+
+3. **Implementation Components**:
+   - `src/parser/document_chunker.py`: Semantic chunking utility
+   - `src/parser/entity_extractor.py`: Update to process chunks iteratively
+   - `src/agents/synthesis.py`: Add batch processing logic
+   - `src/agents/outline_architect.py`: Receive condensed summaries, not full registry
+   - `config.yaml`: Add chunking config (chunk_size, overlap, batch_size)
+
+4. **Quality Gates**:
+   - Log chunk sizes and verify < 1000 tokens
+   - Validate LLM response schema matches expected keys
+   - Log when LLM returns malformed/empty responses for debugging
+
+**Priority**: CRITICAL - Must be implemented before agents can produce quality outputs
+
+---
+
 ### 4.1 Storage Stack (Immutable by Default)
 
 ```
 User Input
+   ↓
+Document Chunker (NEW)
    ↓
 Immutable Blob Storage
    ↓

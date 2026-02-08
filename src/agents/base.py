@@ -22,6 +22,7 @@ class BaseAgent(ABC):
         llm_provider: LLMProvider,
         structured_state: StructuredState,
         vector_store: Optional[VectorStore] = None,
+        graph_store: Optional[Any] = None,
         novel_id: Optional[str] = None
     ):
         """
@@ -32,13 +33,19 @@ class BaseAgent(ABC):
             llm_provider: LLM provider instance
             structured_state: Structured state storage (DynamoDB)
             vector_store: Vector store for embeddings (Qdrant)
+            graph_store: Graph store for canon (Neo4j)
             novel_id: ID of the novel being processed
         """
         self.name = name
         self.llm_provider = llm_provider
         self.structured_state = structured_state
         self.vector_store = vector_store
+        self.graph_store = graph_store
         self.novel_id = novel_id or str(uuid.uuid4())
+
+        # Add logger for subclasses
+        import logging
+        self.logger = logging.getLogger(f"{__name__}.{name}")
 
     async def read_from_memory(
         self,
@@ -281,6 +288,10 @@ class BaseAgent(ABC):
 
         full_prompt = user_prompt + format_prompt
 
+        self.logger.debug(f"[{self.name}] Calling LLM for structured output")
+        self.logger.debug(f"  System prompt length: {len(system_prompt)} chars")
+        self.logger.debug(f"  User prompt length: {len(user_prompt)} chars")
+
         # Try up to 2 times in case of JSON parsing errors
         last_error = None
         for attempt in range(2):
@@ -291,18 +302,28 @@ class BaseAgent(ABC):
                 max_tokens=max_tokens
             )
 
+            self.logger.debug(f"  LLM raw response length: {len(response)} chars")
+            self.logger.debug(f"  LLM raw response preview: {response[:300]}...")
+
             # Extract and parse JSON response
             cleaned_response = self._extract_json(response)
 
+            self.logger.debug(f"  Cleaned JSON length: {len(cleaned_response)} chars")
+
             try:
-                return json.loads(cleaned_response)
+                parsed = json.loads(cleaned_response)
+                self.logger.debug(f"  Successfully parsed JSON with keys: {list(parsed.keys())}")
+                return parsed
             except json.JSONDecodeError as e:
                 last_error = e
+                self.logger.warning(f"  JSON parsing failed (attempt {attempt+1}/2): {str(e)}")
+                self.logger.warning(f"  Failed response preview: {cleaned_response[:500]}...")
                 if attempt == 0:
                     # First attempt failed, try again with a more explicit prompt
                     full_prompt = user_prompt + "\n\nCRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, no truncation. Complete the entire JSON structure."
                     continue
                 else:
+                    self.logger.error(f"  Failed to parse JSON after 2 attempts")
                     raise ValueError(f"Failed to parse JSON response: {str(last_error)}\nResponse: {cleaned_response[:500]}...")
 
     @abstractmethod

@@ -15,6 +15,48 @@ class IdeaGeneratorAgent(BaseAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(name="idea_generator", *args, **kwargs)
 
+    async def _retrieve_idea_context(self, entity_registry, arc_plan) -> str:
+        """Retrieve plot patterns and similar structures from RAG"""
+        if not self.vector_store or not entity_registry:
+            return ""
+
+        try:
+            # Get all entity types for context
+            characters = entity_registry.get_by_type(EntityType.CHARACTER)
+            locations = entity_registry.get_by_type(EntityType.LOCATION)
+            scene_concepts = entity_registry.get_by_type(EntityType.SCENE_CONCEPT)
+
+            entity_ids = ([c.id for c in characters[:10]] +
+                         [l.id for l in locations[:5]] +
+                         [s.id for s in scene_concepts[:5]])
+
+            if not entity_ids:
+                return ""
+
+            # Retrieve related content
+            rag_results = await self.retrieve_related_entities(
+                entity_ids=entity_ids,
+                relationship_types=['located_in', 'causes', 'foreshadows', 'rules'],
+                max_depth=2
+            )
+
+            if not rag_results:
+                return ""
+
+            # Build context string
+            context_parts = ["## PLOT PATTERNS AND WORLDBUILDING FROM SOURCE\n"]
+            for result in rag_results[:15]:
+                name = result.get("name", "Unknown")
+                content = result.get("content", result.get("summary", ""))
+                if content:
+                    context_parts.append(f"**{name}**: {content[:250]}...")
+
+            return "\n".join(context_parts) + "\n"
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve idea RAG context: {e}")
+            return ""
+
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate ideas to fill gaps
@@ -35,6 +77,9 @@ class IdeaGeneratorAgent(BaseAgent):
         arc_plan = context.get("arc_plan", {})
         validation_results = context.get("validation_results", {})
         user_constraints = context.get("user_constraints", {})
+
+        # Retrieve plot patterns and worldbuilding from RAG
+        rag_context = await self._retrieve_idea_context(entity_registry, arc_plan)
 
         proposals = {
             "ideas": [],

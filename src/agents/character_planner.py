@@ -15,6 +15,86 @@ class CharacterPlannerAgent(BaseAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(name="character_planner", *args, **kwargs)
 
+    async def _retrieve_canon_character_data(self, entity_registry) -> Dict[str, Any]:
+        """Retrieve character states and relationships from graph store"""
+        if not self.graph_store or not entity_registry:
+            return {}
+
+        try:
+            from src.models.canon import CanonQuery, NodeType, EdgeType
+
+            # Get all character nodes from canon
+            character_query = CanonQuery(node_type=NodeType.CHARACTER)
+            canon_characters = await self.graph_store.query_nodes(character_query)
+
+            canon_data = {}
+            for char in canon_characters:
+                char_id = char.id
+
+                # Get character relationships
+                relationships = await self.graph_store.get_edges(
+                    source_id=char_id,
+                    edge_type=None  # Get all edge types
+                )
+
+                canon_data[char_id] = {
+                    "properties": char.properties,
+                    "status": char.properties.get("status", "alive"),
+                    "location": char.properties.get("current_location"),
+                    "relationships": [
+                        {
+                            "type": rel.type.value,
+                            "target": rel.target_id,
+                            "properties": rel.properties
+                        }
+                        for rel in relationships
+                    ]
+                }
+
+            logger.info(f"Retrieved canon data for {len(canon_data)} characters")
+            return canon_data
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve canon character data: {e}")
+            return {}
+
+    async def _retrieve_character_context(self, entity_registry) -> str:
+        """Retrieve character backgrounds and relationships from RAG"""
+        if not self.vector_store or not entity_registry:
+            return ""
+
+        try:
+            # Get character IDs
+            characters = entity_registry.get_by_type(EntityType.CHARACTER)
+            if not characters:
+                return ""
+
+            entity_ids = [c.id for c in characters[:15]]  # Limit to avoid token overflow
+
+            # Retrieve related content
+            rag_results = await self.retrieve_related_entities(
+                entity_ids=entity_ids,
+                relationship_types=['allies_with', 'opposes', 'mentors', 'knows'],
+                max_depth=2
+            )
+
+            if not rag_results:
+                return ""
+
+            # Build context string
+            context_parts = ["## CHARACTER BACKGROUNDS FROM SOURCE DOCUMENTS\n"]
+            for result in rag_results[:20]:
+                name = result.get("name", "Unknown")
+                content = result.get("content", result.get("summary", ""))
+                if content:
+                    context_parts.append(f"**{name}**: {content[:300]}...")
+
+            return "\n".join(context_parts) + "\n"
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve character RAG context: {e}")
+            return ""
+
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Plan character development
@@ -32,11 +112,18 @@ class CharacterPlannerAgent(BaseAgent):
         entity_registry = context.get("entity_registry")
         arc_plan = context.get("arc_plan", {})
 
+        # Retrieve character context from RAG
+        rag_context = await self._retrieve_character_context(entity_registry)
+
+        # Retrieve character states and relationships from graph store
+        canon_data = await self._retrieve_canon_character_data(entity_registry)
+
         analysis = {
             "character_analysis": {},
             "development_gaps": [],
             "new_character_proposals": [],
             "consistency_issues": [],
+            "canon_character_states": canon_data,
             "recommendations": []
         }
 
@@ -44,7 +131,7 @@ class CharacterPlannerAgent(BaseAgent):
             # Analyze characters
             characters = entity_registry.get_by_type(EntityType.CHARACTER)
             analysis["character_analysis"] = await self._analyze_characters(
-                characters, outline, arc_plan
+                characters, outline, arc_plan, canon_data
             )
 
             # Check for development gaps
@@ -73,10 +160,12 @@ class CharacterPlannerAgent(BaseAgent):
         self,
         characters: List[Any],
         outline: Optional[Dict[str, Any]],
-        arc_plan: Dict[str, Any]
+        arc_plan: Dict[str, Any],
+        canon_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Analyze character usage and development"""
         character_analysis = {}
+        canon_data = canon_data or {}
 
         scenes = outline.get("scenes", []) if outline else []
 

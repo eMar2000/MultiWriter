@@ -9,8 +9,19 @@ from src.validation.continuity import ContinuityValidationService
 from src.models.canon import CanonNode, CanonEdge, NodeType, EdgeType, ValidationResult
 from src.models.outline import NovelOutline
 from src.models.scene import SceneOutline
+from src.models.entity import EntityRegistry
 
 logger = logging.getLogger(__name__)
+
+# Map EntityRegistry entity_type to canon NodeType (for seed and sync)
+ENTITY_TYPE_TO_NODE_TYPE = {
+    "character": NodeType.CHARACTER,
+    "location": NodeType.LOCATION,
+    "organization": NodeType.ORGANIZATION,
+    "item": NodeType.OBJECT,
+    "event": NodeType.EVENT,
+    "rule": NodeType.RULE,
+}
 
 
 class CanonSyncManager:
@@ -30,6 +41,68 @@ class CanonSyncManager:
         """
         self.graph_store = graph_store
         self.validation_service = validation_service
+
+    async def seed_registry_to_canon(self, registry: EntityRegistry) -> Dict[str, Any]:
+        """
+        Seed canon store with all entities from the registry (World Registry Initializer).
+        Call once at story start before the planning loop so scene->character/location edges
+        reference existing nodes.
+
+        Args:
+            registry: Entity registry from document ingestion
+
+        Returns:
+            Result with nodes_created, nodes_updated, violations, warnings
+        """
+        result = {
+            "nodes_created": 0,
+            "nodes_updated": 0,
+            "violations": [],
+            "warnings": [],
+        }
+        for entity_id, entity in registry.entities.items():
+            entity_type_val = (
+                entity.entity_type.value
+                if hasattr(entity.entity_type, "value")
+                else str(entity.entity_type)
+            )
+            node_type = ENTITY_TYPE_TO_NODE_TYPE.get(entity_type_val)
+            if not node_type:
+                continue
+            mutation = {
+                "type": "node",
+                "operation": "create",
+                "data": {
+                    "id": entity_id,
+                    "type": node_type,
+                    "properties": {
+                        "name": entity.name,
+                        "summary": entity.summary,
+                        "tags": entity.tags or [],
+                        "source_doc": entity.source_doc,
+                    },
+                },
+            }
+            validation = await self.validation_service.validate_mutation(mutation)
+            if not validation.is_valid:
+                result["violations"].extend(validation.violations)
+                continue
+            node = CanonNode(
+                id=entity_id,
+                type=node_type,
+                properties=mutation["data"]["properties"],
+            )
+            existing = await self.graph_store.get_node(entity_id)
+            if existing:
+                await self.graph_store.update_node(entity_id, **node.properties)
+                result["nodes_updated"] += 1
+            else:
+                await self.graph_store.create_node(node)
+                result["nodes_created"] += 1
+        if result["violations"]:
+            logger.warning(f"Seed registry: {len(result['violations'])} validation violations")
+        logger.info(f"Seed registry to canon: {result['nodes_created']} created, {result['nodes_updated']} updated")
+        return result
 
     async def sync_outline_to_canon(
         self,
@@ -137,17 +210,12 @@ class CanonSyncManager:
         # Sync entity registry to canon
         if outline.entity_registry:
             for entity_id, entity in outline.entity_registry.entities.items():
-                # Map entity types to canon node types
-                node_type_map = {
-                    "character": NodeType.CHARACTER,
-                    "location": NodeType.LOCATION,
-                    "organization": NodeType.ORGANIZATION,
-                    "item": NodeType.OBJECT,
-                    "event": NodeType.EVENT,
-                    "rule": NodeType.RULE,
-                }
-
-                node_type = node_type_map.get(entity.entity_type.value)
+                entity_type_val = (
+                    entity.entity_type.value
+                    if hasattr(entity.entity_type, "value")
+                    else str(entity.entity_type)
+                )
+                node_type = ENTITY_TYPE_TO_NODE_TYPE.get(entity_type_val)
                 if not node_type:
                     continue  # Skip unmapped types
 
@@ -204,12 +272,77 @@ class CanonSyncManager:
         """
         result = {
             "updated": 0,
-            "warnings": []
+            "warnings": [],
+            "synced_entities": []
         }
 
-        # This would update outline based on canon changes
-        # For now, simplified - would need more sophisticated diff logic
-        # TODO: Implement canon-to-outline sync when canon is updated by agents
+        if not self.graph_store:
+            result["warnings"].append("No graph store available for canon sync")
+            return result
+
+        try:
+            # Get all character nodes from canon
+            from src.models.canon import CanonQuery, NodeType
+            character_query = CanonQuery(node_type=NodeType.CHARACTER)
+            canon_characters = await self.graph_store.query_nodes(character_query)
+
+            # Get all location nodes from canon
+            location_query = CanonQuery(node_type=NodeType.LOCATION)
+            canon_locations = await self.graph_store.query_nodes(location_query)
+
+            # Update outline with canonical states
+            updated_scenes = []
+            for scene in outline.get("scenes", []):
+                if not isinstance(scene, dict):
+                    continue
+
+                scene_updated = False
+
+                # Update character states in scene
+                for char in canon_characters:
+                    char_id = char.id
+                    if char_id in scene.get("characters_present", []):
+                        # Check if character state has changed
+                        char_props = char.properties
+                        if char_props.get("status") == "dead":
+                            result["warnings"].append(
+                                f"Scene {scene.get('scene_number')} includes dead character {char_id}"
+                            )
+
+                        # Update character locations if available
+                        if "current_location" in char_props:
+                            scene["canon_character_states"] = scene.get("canon_character_states", {})
+                            scene["canon_character_states"][char_id] = {
+                                "status": char_props.get("status", "alive"),
+                                "location": char_props.get("current_location")
+                            }
+                            scene_updated = True
+
+                # Update location details from canon
+                location_id = scene.get("location_id")
+                if location_id:
+                    for loc in canon_locations:
+                        if loc.id == location_id:
+                            loc_props = loc.properties
+                            if "description" in loc_props:
+                                scene["canon_location_details"] = loc_props.get("description")
+                                scene_updated = True
+
+                if scene_updated:
+                    updated_scenes.append(scene)
+                    result["updated"] += 1
+                    result["synced_entities"].append(scene.get("scene_id", "unknown"))
+
+            # Update outline metadata
+            if result["updated"] > 0:
+                outline["last_canon_sync"] = datetime.utcnow().isoformat()
+                outline["canon_sync_version"] = outline.get("canon_sync_version", 0) + 1
+
+            logger.info(f"Canon-to-outline sync: Updated {result['updated']} scenes")
+
+        except Exception as e:
+            logger.error(f"Canon-to-outline sync failed: {e}", exc_info=True)
+            result["warnings"].append(f"Sync error: {str(e)}")
 
         return result
 

@@ -44,46 +44,86 @@ Output a JSON object with:
 }"""
 
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze registry and identify relationships"""
+        """Analyze registry and identify relationships - now with batched processing"""
+        from src.parser.document_chunker import DocumentChunker
+
         registry: EntityRegistry = context.get("entity_registry")
         if not registry:
             raise ValueError("Entity registry required in context")
 
-        # Optional RAG: retrieve related entity details for richer context
-        rag_block = ""
-        if self.vector_store and hasattr(self.llm_provider, "get_embedding"):
+        # CRITICAL FIX: registry.entities is a dict, convert to list
+        entity_list = list(registry.entities.values())
+        self.logger.info(f"[Synthesis] Processing {len(entity_list)} entities")
+
+        # CRITICAL FIX: Process entities in batches to avoid context overload
+        chunker = DocumentChunker()
+        entity_batches = chunker.chunk_entity_list(entity_list, batch_size=15)
+
+        self.logger.info(f"[Synthesis] Split into {len(entity_batches)} batches")
+
+        all_relationships = []
+        all_conflicts = []
+        all_themes = []
+
+        # Process each batch
+        for i, batch in enumerate(entity_batches):
+            self.logger.info(f"[Synthesis] Processing batch {i+1}/{len(entity_batches)} ({len(batch)} entities)")
+
+            # Create a temporary registry with just this batch
+            # Note: entities are EntitySummary objects with entity_type attribute
+            batch_context = "\n\n".join([
+                f"**{e.name}** (ID: {e.id})\n"
+                f"Type: {e.entity_type}\n"
+                f"Summary: {e.summary}"
+                for e in batch
+            ])
+
+            user_prompt = f"""Analyze these entities and identify relationships, conflicts, and themes:
+
+{batch_context}
+
+Identify all meaningful connections between these entities."""
+
             try:
-                query = registry.to_context_string(max_tokens=500) or "characters locations relationships"
-                related = await self.retrieve_related_entities(query, top_k=5)
-                if related:
-                    entity_ids = [r.get("id") for r in related if r.get("id")]
-                    if entity_ids:
-                        retrieved = await self.retrieve_entities(entity_ids)
-                        rag_block = self.build_rag_context(registry, entity_ids, retrieved) + "\n\n"
-            except Exception:
-                pass
+                result = await self.generate_structured_output(
+                    system_prompt=self.system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.7,
+                    max_tokens=2000  # Reduced since we're processing smaller batches
+                )
 
-        # Build prompt with registry (and RAG block if available)
-        user_prompt = f"""{rag_block}Analyze these entities and identify relationships, conflicts, and themes:
+                # Aggregate results
+                all_relationships.extend(result.get("relationships", []))
+                all_conflicts.extend(result.get("conflicts", []))
+                all_themes.extend(result.get("themes", []))
 
-{registry.to_context_string()}
+                self.logger.info(f"  Batch {i+1} found: {len(result.get('relationships', []))} relationships, "
+                               f"{len(result.get('conflicts', []))} conflicts, {len(result.get('themes', []))} themes")
 
-Identify all meaningful connections between entities."""
+            except Exception as e:
+                self.logger.error(f"  Batch {i+1} failed: {e}")
+                continue
 
-        result = await self.generate_structured_output(
-            system_prompt=self.system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.7,
-            max_tokens=4000
-        )
+        # Deduplicate themes by name
+        unique_themes = {}
+        for theme in all_themes:
+            if isinstance(theme, dict):
+                name = theme.get("name", "").lower()
+                if name and name not in unique_themes:
+                    unique_themes[name] = theme
+
+        final_themes = list(unique_themes.values())
+
+        self.logger.info(f"[Synthesis] Total: {len(all_relationships)} relationships, "
+                        f"{len(all_conflicts)} conflicts, {len(final_themes)} themes")
 
         return {
             "agent": self.name,
             "output": {
-                "relationships": result.get("relationships", []),
-                "conflicts": result.get("conflicts", []),
-                "themes": result.get("themes", []),
-                "notes": result.get("notes", "")
+                "relationships": all_relationships,
+                "conflicts": all_conflicts,
+                "themes": final_themes,
+                "notes": f"Processed {len(entity_batches)} batches of entities"
             },
             "status": "success"
         }

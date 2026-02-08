@@ -68,7 +68,7 @@ class Neo4jGraphStore(GraphStore):
 
     async def create_node(self, node: CanonNode) -> CanonNode:
         """Create a new node"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             # Check if node already exists
             result = await session.run(
                 "MATCH (n {id: $id}) RETURN n",
@@ -100,13 +100,13 @@ class Neo4jGraphStore(GraphStore):
                 updated_at=node.updated_at.isoformat(),
                 version=node.version
             )
-            await session.commit()
+            # Transactions in Neo4j Python driver commit automatically at context exit
             logger.debug(f"Created node {node.id} of type {node.type}")
             return node
 
     async def get_node(self, node_id: str) -> Optional[CanonNode]:
         """Get a node by ID"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             result = await session.run(
                 "MATCH (n {id: $id}) RETURN n",
                 id=node_id
@@ -136,7 +136,7 @@ class Neo4jGraphStore(GraphStore):
         node.updated_at = datetime.utcnow()
         node.version += 1
 
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             query = """
             MATCH (n {id: $id})
             SET n.properties = $properties,
@@ -151,18 +151,16 @@ class Neo4jGraphStore(GraphStore):
                 updated_at=node.updated_at.isoformat(),
                 version=node.version
             )
-            await session.commit()
             return node
 
     async def delete_node(self, node_id: str) -> bool:
         """Delete a node and all its edges"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             result = await session.run(
                 "MATCH (n {id: $id}) DETACH DELETE n RETURN count(n) as deleted",
                 id=node_id
             )
             record = await result.single()
-            await session.commit()
             deleted = record["deleted"] if record else 0
             if deleted > 0:
                 logger.debug(f"Deleted node {node_id}")
@@ -178,7 +176,7 @@ class Neo4jGraphStore(GraphStore):
         if not target:
             raise ValueError(f"Target node {edge.target_id} does not exist")
 
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             # Check if edge already exists
             result = await session.run(
                 """
@@ -235,7 +233,7 @@ class Neo4jGraphStore(GraphStore):
         edge_type: Optional[EdgeType] = None
     ) -> List[CanonEdge]:
         """Get edges matching criteria"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             if source_id and target_id:
                 query = """
                 MATCH (a {id: $source_id})-[r]->(b {id: $target_id})
@@ -276,7 +274,7 @@ class Neo4jGraphStore(GraphStore):
 
     async def delete_edge(self, source_id: str, target_id: str, edge_type: EdgeType) -> bool:
         """Delete an edge"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             result = await session.run(
                 """
                 MATCH (a {id: $source_id})-[r]->(b {id: $target_id})
@@ -289,7 +287,6 @@ class Neo4jGraphStore(GraphStore):
                 edge_type=edge_type.value.upper()
             )
             record = await result.single()
-            await session.commit()
             deleted = record["deleted"] if record else 0
             if deleted > 0:
                 logger.debug(f"Deleted edge {edge_type} from {source_id} to {target_id}")
@@ -297,7 +294,7 @@ class Neo4jGraphStore(GraphStore):
 
     async def query_nodes(self, query: CanonQuery) -> List[CanonNode]:
         """Query nodes with filters"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             cypher = "MATCH (n)"
             params = {}
             conditions = []
@@ -346,7 +343,7 @@ class Neo4jGraphStore(GraphStore):
         edge_types = query.edge_types or [EdgeType.BEFORE, EdgeType.AFTER]
         edge_type_names = [et.value.upper() for et in edge_types]
 
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             # Build Cypher query for traversal
             if query.direction == "forward":
                 # Follow AFTER edges forward
@@ -401,7 +398,7 @@ class Neo4jGraphStore(GraphStore):
         direction: str = "both"
     ) -> List[CanonNode]:
         """Get neighboring nodes"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             if direction == "out":
                 cypher = "MATCH (n {id: $node_id})-[r]->(neighbor)"
             elif direction == "in":
@@ -441,7 +438,7 @@ class Neo4jGraphStore(GraphStore):
         edge_types: Optional[List[EdgeType]] = None
     ) -> List[CanonNode]:
         """Get related entities within max_depth hops"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             if edge_types:
                 edge_type_names = [et.value.upper() for et in edge_types]
                 cypher = f"""
@@ -484,7 +481,7 @@ class Neo4jGraphStore(GraphStore):
 
     async def check_cycle(self, start_node_id: str, edge_types: Optional[List[EdgeType]] = None) -> bool:
         """Check if there's a cycle in the graph"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             if edge_types:
                 edge_type_names = [et.value.upper() for et in edge_types]
                 cypher = f"""
@@ -504,7 +501,6 @@ class Neo4jGraphStore(GraphStore):
 
     async def clear(self):
         """Clear all nodes and edges"""
-        async with await self._get_session() as session:
+        async with self.driver.session(database=self.database) as session:
             await session.run("MATCH (n) DETACH DELETE n")
-            await session.commit()
             logger.debug("Cleared Neo4j graph store")

@@ -32,6 +32,8 @@ YOUR TASKS:
 9. Define sequel reactions if applicable
 
 OUTPUT REQUIREMENTS:
+pov_character, characters_present, and location_id MUST be exact entity IDs from the entity list provided in the context (use the IDs in brackets). Do NOT invent IDs like "character_id" or "loc_id". Use only IDs from the Valid character IDs and Valid location IDs listed.
+
 You must return a JSON object with the following structure:
 {
   "scenes": [
@@ -45,13 +47,12 @@ You must return a JSON object with the following structure:
       "conflict": "Obstacle preventing goal",
       "outcome": "Result/disaster",
       "stakes": "What's at risk",
-      "pov_character": "character_id",
-      "characters_present": ["char_id1", "char_id2"],
+      "pov_character": "<use actual character entity ID from context>",
+      "characters_present": ["<use actual character entity IDs from context>"],
       "character_goals": {
-        "char_id1": "their goal",
-        "char_id2": "their goal"
+        "<entity_id>": "their goal"
       },
-      "location_id": "loc_id",
+      "location_id": "<use actual location entity ID from context>",
       "time_period": "When this occurs",
       "plot_beat_id": "beat_id",
       "acts": [1],

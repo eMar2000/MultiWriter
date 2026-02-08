@@ -7,6 +7,14 @@ from datetime import datetime
 from src.models import NovelOutline, Genre, StoryStructure
 
 
+def _resolve_entity_name(registry, entity_id: str) -> str:
+    """Resolve entity ID to display name for export. Returns name or entity_id/Unknown."""
+    if not registry or not entity_id:
+        return entity_id or "Unknown"
+    entity = registry.get(entity_id)
+    return entity.name if entity else (entity_id if entity_id else "Unknown")
+
+
 class MarkdownExporter:
     """Exports novel outlines to Markdown format"""
 
@@ -141,18 +149,25 @@ class MarkdownExporter:
 
                 lines.append("")
 
-                # Characters
+                # Characters (resolve IDs to names for display)
+                registry = outline.entity_registry if hasattr(outline, "entity_registry") else None
                 if scene_pov:
-                    lines.append(f"**POV Character:** {scene_pov}")
+                    pov_display = _resolve_entity_name(registry, scene_pov)
+                    lines.append(f"**POV Character:** {pov_display}")
                 if scene_chars:
-                    chars_str = ', '.join(scene_chars) if isinstance(scene_chars, list) else str(scene_chars)
+                    if registry:
+                        chars_display = [_resolve_entity_name(registry, c) for c in (scene_chars if isinstance(scene_chars, list) else [])]
+                        chars_str = ", ".join(chars_display)
+                    else:
+                        chars_str = ", ".join(scene_chars) if isinstance(scene_chars, list) else str(scene_chars)
                     lines.append(f"**Characters Present:** {chars_str}")
 
                 lines.append("")
 
-                # Location and time
+                # Location and time (resolve location ID to name)
                 if scene_location:
-                    lines.append(f"**Location:** {scene_location}")
+                    loc_display = _resolve_entity_name(registry, scene_location)
+                    lines.append(f"**Location:** {loc_display}")
                 if scene_time:
                     lines.append(f"**Time:** {scene_time}")
 
@@ -237,211 +252,8 @@ class MarkdownExporter:
                     lines.append(f"{i}. {reversal}")
                 lines.append("")
 
-        # --- APPENDIX: Reference Material (not part of outline) ---
-        lines.append("---")
-        lines.append("")
-        lines.append("# Appendix: Reference Material")
-        lines.append("")
-
-        # Characters (only if detailed character profiles exist)
-        if outline.characters and len(outline.characters) > 0:
-            # Check if these are actual CharacterProfile objects or just entity references
-            first_char = outline.characters[0]
-            is_detailed = isinstance(first_char, dict) and any(k in first_char for k in ['want', 'need', 'lie', 'fear']) or \
-                         (hasattr(first_char, 'want') and first_char.want)
-
-            if is_detailed:
-                lines.append("## Character Profiles")
-                lines.append("")
-                for char in outline.characters:
-                    # Handle both Pydantic models and dicts (from serialization)
-                    if isinstance(char, dict):
-                        char_name = char.get("name", "Unknown")
-                        char_role = char.get("role", "unknown")
-                        char_want = char.get("want")
-                        char_need = char.get("need")
-                        char_lie = char.get("lie")
-                        char_fear = char.get("fear")
-                        char_arc_type = char.get("arc_type")
-                        char_starting = char.get("starting_point", "unknown")
-                        char_ending = char.get("ending_point", "unknown")
-                        char_personality = char.get("personality_summary")
-                        char_function = char.get("story_function")
-                        char_relationships = char.get("relationships")
-                    else:
-                        # Pydantic model
-                        char_name = char.name if char.name else "Unknown"
-                        char_role = char.role if char.role else "unknown"
-                        char_want = char.want
-                        char_need = char.need
-                        char_lie = char.lie
-                        char_fear = char.fear
-                        char_arc_type = char.arc_type.value if char.arc_type else None
-                        char_starting = char.starting_point if char.starting_point else "unknown"
-                        char_ending = char.ending_point if char.ending_point else "unknown"
-                        char_personality = char.personality_summary
-                        char_function = char.story_function
-                        char_relationships = char.relationships
-
-                    lines.append(f"### {char_name} ({char_role})")
-                    lines.append("")
-
-                    if char_want:
-                        lines.append(f"**Want:** {char_want}")
-                    if char_need:
-                        lines.append(f"**Need:** {char_need}")
-                    if char_lie:
-                        lines.append(f"**Lie:** {char_lie}")
-                    if char_fear:
-                        lines.append(f"**Fear:** {char_fear}")
-
-                    lines.append("")
-
-                    if char_arc_type:
-                        lines.append(f"**Arc:** {char_arc_type} - From {char_starting} to {char_ending}")
-                        lines.append("")
-
-                    if char_personality:
-                        lines.append(f"**Personality:** {char_personality}")
-                        lines.append("")
-
-                    if char_function:
-                        lines.append(f"**Story Function:** {char_function}")
-                        lines.append("")
-
-                    # Relationships
-                    if char_relationships:
-                        lines.append("**Relationships:**")
-                        for other_char, relationship in char_relationships.items():
-                            lines.append(f"- {other_char}: {relationship}")
-                        lines.append("")
-
-        # World Building (only if detailed worldbuilding exists)
-        if outline.world_rules:
-            world = outline.world_rules
-            lines.append("## World Building")
-            lines.append("")
-
-            # Rules
-            world_rules = world.rules if hasattr(world, 'rules') else world.get("rules", []) if isinstance(world, dict) else []
-            if world_rules:
-                lines.append("### World Rules")
-                lines.append("")
-                for rule in world_rules:
-                    if isinstance(rule, dict):
-                        rule_text = rule.get("rule", "Unknown rule")
-                        category = rule.get("category", "general")
-                        explanation = rule.get("explanation")
-                    else:
-                        # Pydantic WorldRule model
-                        rule_text = rule.rule
-                        category = rule.category if rule.category else "general"
-                        explanation = rule.explanation
-
-                    lines.append(f"**{category.upper()}:** {rule_text}")
-                    if explanation:
-                        lines.append(f"  *{explanation}*")
-                lines.append("")
-
-            # Magic Systems
-            magic_systems = world.magic_systems if hasattr(world, 'magic_systems') else world.get("magic_systems", []) if isinstance(world, dict) else []
-            if magic_systems:
-                lines.append("### Magic/Technology Systems")
-                lines.append("")
-                for system in magic_systems:
-                    if isinstance(system, dict):
-                        system_name = system.get("system_name", "Unknown System")
-                        hardness = system.get("hardness", "unknown")
-                        description = system.get("description")
-                    else:
-                        # Pydantic MagicSystem model
-                        system_name = system.system_name
-                        hardness = system.hardness if system.hardness else "unknown"
-                        description = system.description
-
-                    lines.append(f"**{system_name}** ({hardness} system)")
-                    if description:
-                        lines.append(description)
-                    lines.append("")
-
-            # Locations
-            locations = world.locations if hasattr(world, 'locations') else world.get("locations", []) if isinstance(world, dict) else []
-            if locations:
-                lines.append("### Locations")
-                lines.append("")
-                for location in locations:
-                    if isinstance(location, dict):
-                        loc_name = location.get("name", "Unknown Location")
-                        loc_type = location.get("type", "unknown")
-                        loc_desc = location.get("description")
-                    else:
-                        # Pydantic Location model
-                        loc_name = location.name
-                        loc_type = location.type if location.type else "unknown"
-                        loc_desc = location.description
-
-                    lines.append(f"**{loc_name}** ({loc_type})")
-                    if loc_desc:
-                        lines.append(loc_desc)
-                    lines.append("")
-
-            # Timeline
-            timeline = world.timeline if hasattr(world, 'timeline') else world.get("timeline", []) if isinstance(world, dict) else []
-            if timeline:
-                lines.append("### Timeline")
-                lines.append("")
-                for event in timeline:
-                    if isinstance(event, dict):
-                        event_name = event.get("name", "Unknown Event")
-                        time_period = event.get("time_period", "Unknown time")
-                        event_desc = event.get("description")
-                    else:
-                        # Pydantic TimelineEvent model
-                        event_name = event.name
-                        time_period = event.time_period
-                        event_desc = event.description
-
-                    lines.append(f"**{time_period}:** {event_name}")
-                    if event_desc:
-                        lines.append(f"  {event_desc}")
-                    lines.append("")
-
-        # Entity Registry (Reference material - in appendix, very compact)
-        if outline.entity_registry:
-            lines.append("## Entity Registry")
-            lines.append("")
-            lines.append(f"**Total Entities:** {len(outline.entity_registry.entities)}")
-            lines.append("")
-            lines.append("*Reference list of entities extracted from input documents. This is not part of the outline - see Story Arcs and Scene Outlines above for the actual plot progression.*")
-            lines.append("")
-
-            # Group by type - compact format (just entity counts and sample names)
-            from src.models import EntityType
-            for entity_type in EntityType:
-                entities_of_type = outline.entity_registry.get_by_type(entity_type)
-                if entities_of_type:
-                    # entity_type is an enum, get its value
-                    type_name = entity_type.value.title().replace("_", " ")
-                    # Show only first 5 names as examples, then count
-                    entity_names = [e.name for e in entities_of_type[:5]]
-                    remaining = len(entities_of_type) - 5
-
-                    lines.append(f"### {type_name}s ({len(entities_of_type)})")
-                    if entity_names:
-                        names_str = ", ".join([f"**{name}**" for name in entity_names])
-                        if remaining > 0:
-                            names_str += f", *and {remaining} more*"
-                        lines.append(names_str)
-                    lines.append("")
-
-        # Metadata (if any)
-        if outline.metadata:
-            lines.append("## Metadata")
-            lines.append("")
-            for key, value in outline.metadata.items():
-                lines.append(f"**{key}:** {value}")
-            lines.append("")
-
+        # No appendix: entity registry and reference material stay in RAG / outline model;
+        # the written file is premise, arcs, and scene outlines with names resolved from registry.
         return "\n".join(lines)
 
     def export_to_file(self, outline: NovelOutline, file_path: Path):

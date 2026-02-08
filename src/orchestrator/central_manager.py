@@ -124,10 +124,18 @@ class CentralManager:
 
         while iteration < max_global_iterations:
             iteration += 1
-            logger.info(f"[Iteration {iteration}] Starting iteration...")
+
+            # Log task status
+            pending_count = sum(1 for t in self.tasks.values() if t.status == AgentStatus.PENDING)
+            running_count = sum(1 for t in self.tasks.values() if t.status == AgentStatus.RUNNING)
+            completed_count = sum(1 for t in self.tasks.values() if t.status == AgentStatus.COMPLETED)
+            failed_count = sum(1 for t in self.tasks.values() if t.status == AgentStatus.FAILED)
+
+            logger.info(f"[Iteration {iteration}] Status: {completed_count} completed, {pending_count} pending, {failed_count} failed")
 
             # Get ready tasks (dependencies satisfied)
             ready_tasks = self._get_ready_tasks()
+            logger.info(f"[Iteration {iteration}] Found {len(ready_tasks)} ready tasks: {[t.agent_name for t in ready_tasks]}")
 
             if not ready_tasks:
                 # Check if we're done or stuck
@@ -136,8 +144,15 @@ class CentralManager:
                     break
                 elif all(t.status in (AgentStatus.COMPLETED, AgentStatus.FAILED) for t in self.tasks.values()):
                     logger.warning("[Central Manager] Some tasks failed, stopping")
+                    # Log which tasks failed
+                    for task_name, task in self.failed_tasks.items():
+                        logger.error(f"  Failed task: {task_name} - {task.errors}")
                     break
                 else:
+                    # Debug: show what's blocking
+                    for task_name, task in self.tasks.items():
+                        if task.status == AgentStatus.PENDING:
+                            logger.warning(f"  Pending task: {task_name} - dependencies: {task.dependencies}")
                     logger.warning("[Central Manager] No ready tasks but not all completed - possible circular dependency")
                     break
 
@@ -148,18 +163,21 @@ class CentralManager:
 
                 await self._execute_task(task, iteration)
 
-            # Check if we need another iteration
-            needs_revision = self._check_needs_revision()
-            if not needs_revision:
-                logger.info("[Central Manager] No revisions needed, plan complete")
+            # Check if all tasks are done (don't break just because no revisions needed)
+            if all(t.status == AgentStatus.COMPLETED for t in self.tasks.values()):
+                logger.info("[Central Manager] All tasks completed")
                 break
 
-            # Reset failed tasks for retry
-            for task_name, task in list(self.tasks.items()):
-                if task.status == AgentStatus.FAILED and task.iteration_count < task.max_iterations:
-                    task.status = AgentStatus.PENDING
-                    task.errors = []
-                    logger.info(f"  Resetting {task_name} for retry")
+            # Check if we need another iteration for revisions
+            needs_revision = self._check_needs_revision()
+            if needs_revision:
+                logger.info("[Central Manager] Revisions needed, continuing...")
+                # Reset failed tasks for retry
+                for task_name, task in list(self.tasks.items()):
+                    if task.status == AgentStatus.FAILED and task.iteration_count < task.max_iterations:
+                        task.status = AgentStatus.PENDING
+                        task.errors = []
+                        logger.info(f"  Resetting {task_name} for retry")
 
         # Collect results
         results = {}
@@ -213,6 +231,7 @@ class CentralManager:
         task.iteration_count += 1
 
         logger.info(f"  Executing {task.agent_name} (iteration {task.iteration_count})")
+        logger.debug(f"    Task context keys: {list(task.context.keys())}")
 
         try:
             # Instantiate agent
@@ -220,11 +239,27 @@ class CentralManager:
                 llm_provider=self.llm_provider,
                 structured_state=self.structured_state,
                 vector_store=self.vector_store,
+                graph_store=self.graph_store,
                 novel_id=self.novel_id
             )
 
             # Execute agent
+            logger.debug(f"    Calling {task.agent_name}.execute() with context keys: {list(task.context.keys())}")
             result = await agent.execute(task.context)
+            logger.debug(f"    {task.agent_name} returned result with keys: {list(result.keys()) if isinstance(result, dict) else 'not a dict'}")
+
+            # Validate entity IDs only for agents that output structured entity IDs (arcs/scenes)
+            registry = task.context.get("entity_registry")
+            if registry and (
+                task.agent_name == "outline_architect" or task.agent_name.startswith("scene_expansion_")
+            ):
+                entity_validation = self._validate_entity_ids(result, registry)
+                if not entity_validation.get("valid", True):
+                    task.errors.append(entity_validation.get("message", "Entity ID validation failed"))
+                    task.status = AgentStatus.FAILED
+                    self.failed_tasks[task.agent_name] = task
+                    logger.warning(f"  {task.agent_name} failed entity ID validation: {entity_validation.get('message')}")
+                    return
 
             # Validate result if validation function provided
             if task.validation_fn:
@@ -254,6 +289,8 @@ class CentralManager:
 
     def _update_dependent_contexts(self, completed_task: AgentTask):
         """Update context for tasks that depend on the completed task"""
+        logger.debug(f"  Updating dependent contexts for completed task: {completed_task.agent_name}")
+
         for task in self.tasks.values():
             # Check if this task depends on the completed task (with wildcard support)
             depends = False
@@ -270,9 +307,59 @@ class CentralManager:
                     break
 
             if depends:
+                logger.debug(f"    Updating context for dependent task: {task.agent_name}")
                 # Merge completed task's output into dependent task's context
                 if completed_task.result and "output" in completed_task.result:
-                    task.context.update(completed_task.result["output"])
+                    output_data = completed_task.result["output"]
+                    logger.debug(f"      Merging output keys: {list(output_data.keys()) if isinstance(output_data, dict) else 'not a dict'}")
+                    task.context.update(output_data)
+                    logger.debug(f"      Task {task.agent_name} context now has keys: {list(task.context.keys())}")
+
+    def _validate_entity_ids(self, result: Dict[str, Any], registry: "EntityRegistry") -> Dict[str, Any]:
+        """Validate that all entity IDs in result exist in registry"""
+        import re
+
+        valid_ids = registry.get_all_ids()
+        referenced_ids = set()
+        invalid_ids = set()
+
+        # Extract entity IDs from result (look for common patterns)
+        result_str = str(result)
+
+        # Common ID patterns in results
+        id_patterns = [
+            r'character_ids?["\':\s\[]+([a-f0-9\-]{36})',
+            r'location_ids?["\':\s\[]+([a-f0-9\-]{36})',
+            r'scene_concept_ids?["\':\s\[]+([a-f0-9\-]{36})',
+            r'pov_character["\':\s]+([a-f0-9\-]{36})',
+            r'characters_present["\':\s\[]+([a-f0-9\-]{36})',
+            r'entity_id["\':\s]+([a-f0-9\-]{36})',
+            # Also check for placeholder patterns that should NOT be present
+            r'(char_id\d+|loc_id\d+|character_id\d+|location_id\d+)',
+        ]
+
+        for pattern in id_patterns:
+            matches = re.findall(pattern, result_str, re.IGNORECASE)
+            for match in matches:
+                # Check if it's a placeholder pattern (last pattern in list)
+                if re.match(r'(char_id|loc_id|character_id|location_id)', match, re.IGNORECASE):
+                    invalid_ids.add(match)
+                else:
+                    referenced_ids.add(match)
+
+        # Check if referenced IDs exist in registry
+        for ref_id in referenced_ids:
+            if ref_id not in valid_ids:
+                invalid_ids.add(ref_id)
+
+        if invalid_ids:
+            return {
+                "valid": False,
+                "message": f"Invalid or placeholder entity IDs found: {', '.join(list(invalid_ids)[:5])}. Must use actual entity IDs from registry.",
+                "invalid_ids": list(invalid_ids)
+            }
+
+        return {"valid": True}
 
     def _check_needs_revision(self) -> bool:
         """Check if any tasks need revision"""

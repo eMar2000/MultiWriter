@@ -83,8 +83,9 @@ class QdrantVectorStore(VectorStore):
         self.collection_name = collection_name
         self.vector_size = vector_size
 
-        # Initialize sync client for now (can be made async later)
-        self.client = QdrantClient(host=host, port=port)
+        # Initialize async client
+        url = f"http://{host}:{port}"
+        self.client = AsyncQdrantClient(url=url)
 
     def _get_distance(self, distance: str) -> Distance:
         """Convert distance string to Qdrant Distance enum"""
@@ -103,7 +104,7 @@ class QdrantVectorStore(VectorStore):
     ) -> bool:
         """Create a vector collection in Qdrant"""
         try:
-            self.client.create_collection(
+            await self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(
                     size=vector_size,
@@ -142,7 +143,7 @@ class QdrantVectorStore(VectorStore):
                 )
 
             if qdrant_points:
-                self.client.upsert(
+                await self.client.upsert(
                     collection_name=collection_name,
                     points=qdrant_points
                 )
@@ -170,7 +171,7 @@ class QdrantVectorStore(VectorStore):
                 if conditions:
                     qdrant_filter = Filter(must=conditions)
 
-            results = self.client.search(
+            results = await self.client.search(
                 collection_name=collection_name,
                 query_vector=query_vector,
                 limit=limit,
@@ -195,7 +196,7 @@ class QdrantVectorStore(VectorStore):
     ) -> bool:
         """Delete vectors by IDs from Qdrant"""
         try:
-            self.client.delete(
+            await self.client.delete(
                 collection_name=collection_name,
                 points_selector=point_ids
             )
@@ -212,7 +213,7 @@ class QdrantVectorStore(VectorStore):
         try:
             results = []
             # Qdrant retrieve method
-            retrieved = self.client.retrieve(
+            retrieved = await self.client.retrieve(
                 collection_name=collection_name,
                 ids=entity_ids
             )

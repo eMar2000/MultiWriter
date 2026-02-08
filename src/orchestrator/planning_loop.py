@@ -1,7 +1,7 @@
 """Planning Loop - Iterative planning with quality gates"""
 
 import logging
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Awaitable
 from enum import Enum
 
 from src.llm import LLMProvider
@@ -37,7 +37,8 @@ class PlanningLoop:
         vector_store: Optional[VectorStore] = None,
         graph_store: Optional[GraphStore] = None,
         validation_service: Optional[ContinuityValidationService] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        document_orchestrator: Optional[Any] = None
     ):
         """
         Initialize Planning Loop
@@ -56,6 +57,7 @@ class PlanningLoop:
         self.graph_store = graph_store
         self.validation_service = validation_service
         self.config = config or {}
+        self.document_orchestrator = document_orchestrator
         self.quality_gates: Dict[QualityGate, Callable] = {}
 
         self.observability_manager = ObservabilityManager(
@@ -147,7 +149,8 @@ class PlanningLoop:
         self,
         registry: EntityRegistry,
         novel_input: Optional[NovelInput] = None,
-        novel_id: Optional[str] = None
+        novel_id: Optional[str] = None,
+        on_planning_updated: Optional[Callable[[EntityRegistry, NovelOutline], Awaitable[None]]] = None,
     ) -> NovelOutline:
         """
         Execute iterative planning loop
@@ -156,6 +159,7 @@ class PlanningLoop:
             registry: Entity registry from document ingestion
             novel_input: Novel input
             novel_id: Optional novel ID
+            on_planning_updated: Optional callback(registry, outline) invoked after consolidation and canon sync for incremental RAG re-indexing.
 
         Returns:
             Complete NovelOutline
@@ -165,6 +169,14 @@ class PlanningLoop:
         # Phase 1: Synthesis and Arc Planning
         logger.info("[Phase 1] Synthesis and Arc Planning...")
         arc_plan = await self._phase_synthesis_and_planning(registry, novel_input, novel_id)
+
+        # Incremental RAG Update: Index arc plans after Phase 1
+        if self.document_orchestrator and hasattr(self.document_orchestrator, '_index_arcs'):
+            try:
+                logger.info("  Indexing arc plans to vector store...")
+                await self.document_orchestrator._index_arcs(arc_plan)
+            except Exception as e:
+                logger.warning(f"  Failed to index arcs: {e}")
 
         # Phase 1.5: Theme Guardian (early validation)
         logger.info("[Phase 1.5] Theme Validation...")
@@ -191,6 +203,14 @@ class PlanningLoop:
         # Phase 3: Scene Expansion
         logger.info("[Phase 3] Scene Expansion...")
         expanded_arcs = await self._phase_scene_expansion(arc_plan, registry, novel_input, novel_id)
+
+        # Incremental RAG Update: Index scenes after Phase 3
+        if self.document_orchestrator and hasattr(self.document_orchestrator, '_index_scenes'):
+            try:
+                logger.info("  Indexing generated scenes to vector store...")
+                await self.document_orchestrator._index_scenes(expanded_arcs)
+            except Exception as e:
+                logger.warning(f"  Failed to index scenes: {e}")
 
         # Quality Gate: Scene Quality
         if not await self._check_quality_gate(QualityGate.SCENE_QUALITY, expanded_arcs, registry):
@@ -234,6 +254,13 @@ class PlanningLoop:
             except Exception as e:
                 logger.warning(f"  Canon sync failed: {e}")
 
+        # Incremental RAG update: re-index so vector store reflects latest outline/entities
+        if on_planning_updated:
+            try:
+                await on_planning_updated(registry, outline)
+            except Exception as e:
+                logger.warning(f"  RAG re-index after planning failed: {e}")
+
         # Version Manager: checkpoint after consolidation
         try:
             await self.version_manager.create_checkpoint(
@@ -275,7 +302,11 @@ class PlanningLoop:
         """Phase 1: Synthesis and arc planning"""
         from src.agents import SynthesisAgent, OutlineArchitectAgent
 
-        # Create tasks
+        logger.info(f"  Registry has {len(registry.entities)} entities")
+        logger.info(f"  Novel input: {novel_input.premise[:100] if novel_input else 'None'}...")
+
+        # Create tasks - outline_architect needs entity_registry and novel_input;
+        # synthesis result (relationships, conflicts, themes) is merged when synthesis completes
         tasks = [
             AgentTask(
                 agent_name="synthesis",
@@ -289,18 +320,28 @@ class PlanningLoop:
             AgentTask(
                 agent_name="outline_architect",
                 agent_class=OutlineArchitectAgent,
-                context={},  # Will be updated by synthesis result
+                context={
+                    "entity_registry": registry,
+                    "novel_input": novel_input.model_dump() if novel_input else {}
+                },
                 dependencies=["synthesis"],
                 priority=9
             )
         ]
 
+        logger.info(f"  Created {len(tasks)} tasks for Phase 1")
+
         # Execute tasks
         result = await self.central_manager.execute_plan(tasks, novel_id=novel_id)
+
+        logger.info(f"  Phase 1 complete: {result.get('completed')} completed, {result.get('failed')} failed")
 
         # Combine results
         synthesis_output = result["results"].get("synthesis", {}).get("output", {})
         architect_output = result["results"].get("outline_architect", {}).get("output", {})
+
+        logger.info(f"  Synthesis found {len(synthesis_output.get('themes', []))} themes")
+        logger.info(f"  Architect created {len(architect_output.get('arcs', []))} arcs")
 
         return {
             "relationships": synthesis_output.get("relationships", []),
@@ -414,7 +455,7 @@ class PlanningLoop:
                         "entity_registry": registry,
                         "novel_input": novel_input.model_dump() if novel_input else {}
                     },
-                    dependencies=["outline_architect"],
+                    dependencies=[],  # FIXED: No dependencies needed - arc_plan already in context
                     priority=7 - idx  # Earlier arcs have higher priority
                 )
             )

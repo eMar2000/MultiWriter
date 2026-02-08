@@ -14,6 +14,86 @@ class ThemeGuardianAgent(BaseAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(name="theme_guardian", *args, **kwargs)
 
+    async def _retrieve_canon_motifs(self) -> Dict[str, Any]:
+        """Retrieve motif tracking from graph store"""
+        if not self.graph_store:
+            return {}
+
+        try:
+            from src.models.canon import CanonQuery, NodeType
+
+            # Get all motif nodes from canon
+            motif_query = CanonQuery(node_type=NodeType.MOTIF)
+            canon_motifs = await self.graph_store.query_nodes(motif_query)
+
+            motifs_data = {}
+            for motif in canon_motifs:
+                motif_id = motif.id
+                props = motif.properties
+
+                # Get motif appearances
+                motif_edges = await self.graph_store.get_edges(
+                    source_id=motif_id,
+                    edge_type=None
+                )
+
+                motifs_data[motif_id] = {
+                    "name": props.get("name", "Unknown"),
+                    "description": props.get("description", ""),
+                    "symbolic_meaning": props.get("symbolic_meaning", ""),
+                    "appearances": props.get("appearances", []),
+                    "appearance_count": props.get("appearance_count", 0),
+                    "target_appearances": props.get("target_appearances", 0),
+                    "related_scenes": [edge.target_id for edge in motif_edges]
+                }
+
+            logger.info(f"Retrieved {len(motifs_data)} motifs from canon")
+            return motifs_data
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve canon motifs: {e}")
+            return {}
+
+    async def _retrieve_thematic_context(self, entity_registry) -> str:
+        """Retrieve thematic elements and motifs from RAG"""
+        if not self.vector_store or not entity_registry:
+            return ""
+
+        try:
+            # Get all entities to find thematic connections
+            from src.models import EntityType
+            all_entities = []
+            for entity_type in [EntityType.CHARACTER, EntityType.LOCATION, EntityType.SCENE_CONCEPT]:
+                entities = entity_registry.get_by_type(entity_type)
+                all_entities.extend([e.id for e in entities[:10]])
+
+            if not all_entities:
+                return ""
+
+            # Retrieve related content
+            rag_results = await self.retrieve_related_entities(
+                entity_ids=all_entities[:20],
+                relationship_types=['symbolizes', 'represents', 'opposes', 'parallels'],
+                max_depth=1
+            )
+
+            if not rag_results:
+                return ""
+
+            # Build context string
+            context_parts = ["## THEMATIC ELEMENTS FROM SOURCE DOCUMENTS\n"]
+            for result in rag_results[:15]:
+                name = result.get("name", "Unknown")
+                content = result.get("content", result.get("summary", ""))
+                if content:
+                    context_parts.append(f"**{name}**: {content[:250]}...")
+
+            return "\n".join(context_parts) + "\n"
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve thematic RAG context: {e}")
+            return ""
+
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validate thematic coherence
@@ -31,10 +111,18 @@ class ThemeGuardianAgent(BaseAgent):
         relationships = context.get("relationships", {})
         arc_plan = context.get("arc_plan", {})
         themes = relationships.get("themes", []) if isinstance(relationships, dict) else []
+        entity_registry = context.get("entity_registry")
+
+        # Retrieve thematic elements from RAG
+        rag_context = await self._retrieve_thematic_context(entity_registry)
+
+        # Retrieve motif tracking from graph store
+        canon_motifs = await self._retrieve_canon_motifs()
 
         analysis = {
             "themes_identified": themes,
             "motif_tracking": {},
+            "canon_motifs": canon_motifs,
             "thematic_inconsistencies": [],
             "abandoned_themes": [],
             "recommendations": []
@@ -148,7 +236,7 @@ class ThemeGuardianAgent(BaseAgent):
 
         for theme in themes:
             theme_name = theme.get("name", str(theme)) if isinstance(theme, dict) else str(theme)
-            
+
             # Check early scenes
             in_early = any(
                 theme_name.lower() in str(scene).lower()
@@ -180,7 +268,7 @@ class ThemeGuardianAgent(BaseAgent):
         motif_tracking = analysis.get("motif_tracking", {})
         for theme_name, tracking in motif_tracking.items():
             appearances = tracking.get("appearances", 0)
-            
+
             if appearances == 0:
                 recommendations.append({
                     "type": "missing_motif",
